@@ -4,7 +4,7 @@ const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, assessPlot } = require('./rules');
+const { checkSale, checkMortgage, assessPlot, partialSale } = require('./rules');
 
 const app = express();
 app.use(cors());
@@ -127,6 +127,9 @@ app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
   const deed_area = area(req.body.deed_area);
   const bad = Object.entries({ seller, buyer, deed_no, deed_area }).filter(([, v]) => v === null).map(([k]) => k);
   if (bad.length) return invalid(res, bad);
+  // Full-plot sales only (prototype). Unsupported request -> 400, nothing written to the ledger.
+  const partial = partialSale(plot, deed_area);
+  if (partial) return res.status(400).json({ error: partial.en, ...partial, plot_area: plot.area, deed_area });
 
   const usedDeedNos = db.get().transactions.map((t) => t.deed_no);
   const result = checkSale(plot, seller, deed_area, { buyer, deedNo: deed_no, usedDeedNos });

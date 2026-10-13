@@ -452,7 +452,12 @@ export default function App() {
               <div>{tr('বিক্রেতা', 'Seller')}<input style={input} value={form.seller} onChange={setField('seller')} /></div>
               <div>{tr('ক্রেতা', 'Buyer')}<input style={input} value={form.buyer} onChange={setField('buyer')} placeholder="e.g. Karim" /></div>
               <div>{tr('দলিল নং', 'Deed no.')}<input style={input} value={form.deed_no} onChange={setField('deed_no')} placeholder="e.g. D-1001" /></div>
-              <div>{tr('দলিলের পরিমাণ (শতক)', 'Deed area (decimal)')}<input style={input} value={form.deed_area} onChange={setField('deed_area')} /></div>
+              <div>
+                {tr('দলিলের পরিমাণ (শতক)', 'Deed area (decimal)')}<input style={input} value={form.deed_area} onChange={setField('deed_area')} />
+                <div style={{ fontSize: 12, color: '#777' }}>
+                  {tr(`শুধু পুরো জমি (${data.plot.area} শতক) বিক্রয় করা যাবে (প্রোটোটাইপ)`, `Full plot only (${data.plot.area} decimal) in this prototype`)}
+                </div>
+              </div>
             </div>
             <button {...gated('sale.initiate', btn('#111'))} onClick={submitSale}>{tr('বিক্রয় যাচাই ও শুরু করুন', 'Verify and start sale')}</button>
             {needs('sale.initiate')}

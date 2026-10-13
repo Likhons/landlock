@@ -16,6 +16,7 @@ UI: in `../../landlock-ui` run `npm install` then `npm run dev` (http://localhos
 - Plot Lock: starting a sale sets the plot to Pending; any second sale is blocked.
 - Ownership check: seller must be the recorded owner.
 - Area check: deed area cannot exceed khatian area.
+- Full-plot sales only (prototype): a deed area smaller than the recorded plot area is rejected with 400 PARTIAL_SALE_NOT_SUPPORTED (otherwise the mutation would give the buyer the whole plot). Plot subdivision is a possible future feature.
 - Bank mortgage: double mortgage, mortgage during a sale and mortgage by a non-owner are blocked.
 - Survey chain: unexplained owner changes / area increases between CS, SA, RS, BS are flagged Yellow.
 - Registration vs mutation gap: registered-but-not-mutated deeds are flagged Yellow and listed at /api/gap.

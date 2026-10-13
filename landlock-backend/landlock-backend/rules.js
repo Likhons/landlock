@@ -13,6 +13,18 @@ const disputedReason = (tx) => ({
     : 'This plot is disputed (mutation was rejected). No sale or mortgage is allowed until the dispute is resolved.',
 });
 
+// Prototype rule: only the WHOLE plot can be sold. A smaller deed area would need the plot to be
+// split (subdivision), which is not built yet; without it the mutation would wrongly give the buyer
+// the whole plot. Returns null for a full-plot sale. (A larger area is AREA_EXCEEDS in checkSale.)
+function partialSale(plot, deedArea) {
+  if (!(Number(deedArea) < plot.area)) return null;
+  return {
+    code: 'PARTIAL_SALE_NOT_SUPPORTED',
+    bn: `আংশিক বিক্রয় এই প্রোটোটাইপে সমর্থিত নয়। দলিলের পরিমাণ (${deedArea} শতক) খতিয়ানের পুরো পরিমাণের (${plot.area} শতক) সমান হতে হবে। জমি ভাগ (subdivision) পরের সংস্করণে আসবে।`,
+    en: `Partial sales are not supported in this prototype. The deed area (${deedArea}) must equal the full recorded plot area (${plot.area}). Plot subdivision may come in a future version.`,
+  };
+}
+
 // Deed numbers are compared without spaces/case, so "d-1" and " D-1 " count as the same deed.
 const normDeed = (v) => String(v).trim().toUpperCase();
 
@@ -178,4 +190,4 @@ function assessPlot(plot, activeTx, ledgerStatus, disputedTx) {
   return { level, reasons };
 }
 
-module.exports = { checkSale, checkMortgage, assessPlot };
+module.exports = { checkSale, checkMortgage, assessPlot, partialSale };

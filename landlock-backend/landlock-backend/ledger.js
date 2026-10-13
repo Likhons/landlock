@@ -11,7 +11,7 @@ const path = require('path');
 const db = require('./db');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage } = require('./rules');
+const { checkSale, checkMortgage, partialSale } = require('./rules');
 
 const GENESIS = '0'.repeat(64);
 const SAMPLE_NOTICE = 'DEMO/SAMPLE DATA - not verified official khatian records';
@@ -119,6 +119,7 @@ function replay(ledger) {
 
     switch (e.event_type) {
       case 'SALE_INITIATED':
+        if (partialSale(plot, d.deed_area)) return fail('partial sale (deed area smaller than the plot) is not supported');
         if (!checkSale(plot, d.seller, d.deed_area, {
           buyer: d.buyer, deedNo: d.deed_no, usedDeedNos: [...txs.values()].map((t) => t.deed_no),
         }).allowed) return fail('sale was not allowed in the replayed state');

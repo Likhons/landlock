@@ -295,6 +295,72 @@ async function disputeTests() {
   await post('/dev/reset');
 }
 
+// Appends a correctly hashed AND signed entry plus a matching signed checkpoint, the way someone
+// holding the private key could. Used to prove that ledger replay itself enforces the workflow rules.
+function forgeSignedEvent(plot_id, event_type, data) {
+  const crypto = require('crypto');
+  const { privateKey } = JSON.parse(fs.readFileSync(ENV.LANDLOCK_KEY_FILE, 'utf8'));
+  const d = readData();
+  const prev = d.ledger[d.ledger.length - 1];
+  const e = { id: d.ledger.length + 1, plot_id, event_type, data, timestamp: new Date().toISOString(), prev_hash: prev.hash };
+  e.hash = crypto.createHash('sha256').update(e.prev_hash + JSON.stringify({ plot_id, event_type, data, timestamp: e.timestamp })).digest('hex');
+  e.signature = crypto.sign(null, Buffer.from(e.hash), privateKey).toString('base64');
+  e.signer = prev.signer;
+  d.ledger.push(e);
+  writeData(d);
+  const cp = { length: d.ledger.length, head_hash: e.hash, genesis_hash: d.ledger[0].hash, updated_at: new Date().toISOString() };
+  cp.signature = crypto.sign(null, Buffer.from(JSON.stringify(cp)), privateKey).toString('base64');
+  fs.writeFileSync(CP_FILE, JSON.stringify(cp, null, 2));
+}
+
+async function fullPlotTests() {
+  section('Full-plot sales only (no partial sales in this prototype)');
+  await post('/dev/reset');
+  const ledgerLen = async () => (await get('/ledger')).length;
+  const partialErr = (r) => r.status === 400 && r.body.code === 'PARTIAL_SALE_NOT_SUPPORTED' && r.body.bn && r.body.en;
+  const before = await ledgerLen();
+
+  let r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-F1', deed_area: 3 }, SR);
+  ok('F1. Partial sale (3 of 10) rejected: 400 PARTIAL_SALE_NOT_SUPPORTED, bilingual', partialErr(r) && r.body.plot_area === 10 && r.body.deed_area === 3);
+  ok('F2. Nearly-full sale (9.99 of 10) also rejected', partialErr(await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-F2', deed_area: 9.99 }, SR)));
+  ok('F3. Rejected partial sale creates no transaction, no lock, no ledger entry',
+    (await get('/transactions')).length === 0 && (await get('/plots/P1')).plot.status === 'Free' && (await ledgerLen()) === before);
+  const reg = await post('/sale/1/register', {}, SR);
+  const mut = await post('/sale/1/mutate', {}, AC);
+  ok('F4. Partial sale cannot be registered or mutated (no transaction exists, 404)', reg.status === 404 && mut.status === 404);
+  ok('F5. Owner unchanged after the partial attempts', (await get('/plots/P1')).plot.current_owner === 'Rahim');
+
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-F3', deed_area: 11 }, SR);
+  ok('F6. Larger-than-plot area still blocked as AREA_EXCEEDS (409)', r.status === 409 && r.body.reasons.some((x) => x.code === 'AREA_EXCEEDS'));
+
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-F4', deed_area: '10' }, SR);
+  const txId = r.body.transaction && r.body.transaction.id;
+  ok('F7. Full-area sale accepted (201)', r.status === 201 && r.body.transaction.deed_area === 10);
+  ok('F8. Full-area sale registers (200)', (await post(`/sale/${txId}/register`, {}, SR)).status === 200);
+  r = await post(`/sale/${txId}/mutate`, {}, AC);
+  const p = await get('/plots/P1');
+  ok('F9. Full-area sale completes: Karim owns all 10, plot Free, Green',
+    r.status === 200 && p.plot.current_owner === 'Karim' && p.plot.area === 10 && p.plot.status === 'Free' && p.risk.level === 'green');
+
+  // Step 2 protections still hold together with the new rule
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Hasan', deed_no: 'D-F5', deed_area: 20 }, SR);
+  const tx5 = r.body.transaction.id;
+  await post(`/sale/${tx5}/register`, {}, SR);
+  ok('F10. Partial sale on a locked plot is rejected and the lock stays', partialErr(await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'X', deed_no: 'D-F6', deed_area: 5 }, SR))
+    && (await get('/plots/P5')).plot.status === 'Pending');
+  ok('F11. Registered deed still cannot be cancelled (Step 2)', (await post(`/sale/${tx5}/cancel`, {}, SR)).body.code === 'REGISTERED_DEED_CANNOT_CANCEL');
+  ok('F12. Ledger valid after the full-plot workflow', (await get('/ledger/verify')).valid === true);
+
+  // Even a correctly signed partial-sale event (someone holding the key) fails ledger replay
+  await post('/dev/reset');
+  await stop();
+  forgeSignedEvent('P2', 'SALE_INITIATED', { tx_id: 1, seller: 'Karim', buyer: 'Jamal', deed_no: 'D-F7', deed_area: 4, by_role: SR });
+  await start();
+  const v = await get('/ledger/verify');
+  ok('F13. Signed partial-sale event in the ledger is rejected by replay', !v.valid && v.kind === 'workflow' && /partial sale/.test(v.reason));
+  await post('/dev/reset');
+}
+
 async function integrityTests() {
   section('Ledger integrity (live server, attacker edits the stored data)');
   // Build a ledger with a few events: GENESIS, SALE_INITIATED, REGISTRATION_DONE, MUTATION_DONE, MORTGAGE_CREATED
@@ -413,6 +479,7 @@ async function restartTests() {
     await roleTests();
     await validationTests();
     await disputeTests();
+    await fullPlotTests();
     await integrityTests();
     await restartTests();
   } catch (e) {
