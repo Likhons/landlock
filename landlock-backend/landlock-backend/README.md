@@ -19,6 +19,7 @@ UI: in `../../landlock-ui` run `npm install` then `npm run dev` (http://localhos
 - Bank mortgage: double mortgage, mortgage during a sale and mortgage by a non-owner are blocked.
 - Survey chain: unexplained owner changes / area increases between CS, SA, RS, BS are flagged Yellow.
 - Registration vs mutation gap: registered-but-not-mutated deeds are flagged Yellow and listed at /api/gap.
+- Registered deed lock: once a deed is registered the sale **cannot be cancelled**. Only the AC Land Officer can complete the mutation (owner changes, plot unlocks) or **reject** it with a reason. A rejected mutation makes the transaction `disputed` and the plot `Disputed` (Red, still locked, owner unchanged): no sale or mortgage until the dispute is resolved outside the prototype.
 - Hash chain + digital signature: every event is SHA-256 linked to the previous one and signed (Ed25519).
 - Role-based access control (prototype) and strengthened ledger verification (see below).
 
@@ -26,8 +27,8 @@ UI: in `../../landlock-ui` run `npm install` then `npm run dev` (http://localhos
 | Role | Can do (enforced by the API) |
 |---|---|
 | Buyer (default) | Read only: plots, owners, mortgage status, survey history, ledger |
-| Sub-Registrar | Start / register / cancel a sale (deed), register / release a mortgage |
-| AC Land Officer | Mutation (namjari): change the owner after a registered deed |
+| Sub-Registrar | Start / register a sale (deed), cancel it **before registration**, register / release a mortgage |
+| AC Land Officer | Mutation (namjari): complete it (owner changes) or reject it (plot becomes Disputed) |
 
 - The UI sends the chosen role in the `X-Demo-Role` header. No header = Buyer. Every write route checks the permission on the server (`guard()` in server.js) and returns **403 PERMISSION_DENIED** otherwise. The UI only hides/disables buttons for convenience.
 - Extra permissions can only be granted on the server, e.g. `LANDLOCK_EXTRA_GRANTS="sub_registrar:sale.mutate"`.
@@ -67,9 +68,10 @@ UI: in `../../landlock-ui` run `npm install` then `npm run dev` (http://localhos
 | POST | /api/sale/initiate | Sub-Registrar | Run checks, lock plot or block |
 | POST | /api/sale/:id/register | Sub-Registrar | Mark deed registered |
 | POST | /api/sale/:id/mutate | AC Land Officer | Mutation done, owner changes, unlock |
-| POST | /api/sale/:id/cancel | Sub-Registrar | Cancel, unlock |
+| POST | /api/sale/:id/reject-mutation | AC Land Officer | Reject mutation (`{reason}`): transaction disputed, plot Disputed (Red, locked) |
+| POST | /api/sale/:id/cancel | Sub-Registrar | Cancel and unlock, only before registration (otherwise 409 REGISTERED_DEED_CANNOT_CANCEL) |
 | POST | /api/mortgage/create, /api/mortgage/release | Sub-Registrar | Bank mortgage |
-| GET | /api/gap | any | Registered deeds waiting for mutation |
+| GET | /api/gap | any | Registered deeds waiting for mutation, including disputed ones |
 | GET | /api/ledger, /api/ledger/verify, /api/ledger/public-key | any | Ledger, full integrity check, public key |
 | POST | /api/dev/reset, /api/dev/tamper, /api/dev/tamper-smart, /api/dev/attack | demo only | Reset and attacker simulations (`attack` types: owner_change, bad_signature, break_link, delete_middle, truncate_tail, reorder) |
 

@@ -11,11 +11,11 @@ const DEFAULT_ROLE = 'buyer'; // least privilege
 
 // Buyer has no write permissions (read-only).
 // Sub-Registrar: sale/deed registration + mortgage deeds (registered at the Sub-Registry office).
-// AC Land Officer: mutation (namjari) only.
+// AC Land Officer: mutation (namjari) only - complete it, or formally reject it (plot becomes Disputed).
 const PERMISSIONS = {
   buyer: [],
   sub_registrar: ['sale.initiate', 'sale.register', 'sale.cancel', 'mortgage.create', 'mortgage.release'],
-  ac_land: ['sale.mutate'],
+  ac_land: ['sale.mutate', 'sale.reject_mutation'],
 };
 
 const ALL_PERMISSIONS = [...new Set(Object.values(PERMISSIONS).flat())];
@@ -36,6 +36,7 @@ const EVENT_PERMISSION = {
   SALE_BLOCKED: 'sale.initiate',
   REGISTRATION_DONE: 'sale.register',
   MUTATION_DONE: 'sale.mutate',
+  MUTATION_REJECTED: 'sale.reject_mutation',
   SALE_CANCELLED: 'sale.cancel',
   MORTGAGE_CREATED: 'mortgage.create',
   MORTGAGE_BLOCKED: 'mortgage.create',

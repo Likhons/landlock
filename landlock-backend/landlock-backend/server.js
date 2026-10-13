@@ -14,6 +14,27 @@ const findPlot = (id) => db.get().plots.find((p) => p.id === id);
 const findTx = (id) => db.get().transactions.find((t) => t.id === Number(id));
 const activeTxFor = (plot_id) =>
   db.get().transactions.find((t) => t.plot_id === plot_id && t.state === 'active');
+const disputedTxFor = (plot_id) =>
+  db.get().transactions.find((t) => t.plot_id === plot_id && t.state === 'disputed');
+
+// Finds the active transaction for a workflow step, or sends a clear error and returns null.
+function activeTxOrError(req, res) {
+  const tx = findTx(req.params.id);
+  if (tx && tx.state === 'disputed') {
+    res.status(409).json({
+      error: 'This transaction is disputed (mutation was rejected). No further workflow step is allowed.',
+      code: 'TX_DISPUTED',
+      bn: 'এই লেনদেনটি বিরোধপূর্ণ (নামজারি বাতিল হয়েছে)। আর কোনো ধাপ করা যাবে না।',
+      en: 'This transaction is disputed (mutation was rejected). No further workflow step is allowed.',
+    });
+    return null;
+  }
+  if (!tx || tx.state !== 'active') {
+    res.status(404).json({ error: 'Active transaction not found' });
+    return null;
+  }
+  return tx;
+}
 
 // Every write goes through this: 1) the role must hold the permission (checked here on the server,
 // never only in the UI), 2) the ledger and land records must verify, so nothing is written on top of
@@ -59,6 +80,7 @@ const FIELD_LABEL = {
   buyer: { bn: 'ক্রেতা', en: 'buyer' },
   deed_no: { bn: 'দলিল নং', en: 'deed no.' },
   deed_area: { bn: 'দলিলের পরিমাণ (শূন্যের বেশি সংখ্যা)', en: 'deed area (a number greater than 0)' },
+  reason: { bn: 'বাতিলের কারণ', en: 'rejection reason' },
   owner: { bn: 'বন্ধকদাতা', en: 'mortgagor' },
   bank: { bn: 'ব্যাংক', en: 'bank' },
   loan_ref: { bn: 'ঋণ নং', en: 'loan no.' },
@@ -79,9 +101,11 @@ app.get('/api/plots', (req, res) => res.json(db.get().plots));
 app.get('/api/plots/:id', (req, res) => {
   const plot = findPlot(req.params.id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
-  const risk = assessPlot(plot, activeTxFor(plot.id), ledger.verify());
+  const disputed = disputedTxFor(plot.id);
+  const risk = assessPlot(plot, activeTxFor(plot.id), ledger.verify(), disputed);
   res.json({
     plot, risk, history: ledger.forPlot(plot.id), active_transaction: activeTxFor(plot.id) || null,
+    disputed_transaction: disputed || null,
     data_notice: 'DEMO/SAMPLE DATA - not verified official khatian records',
   });
 });
@@ -126,8 +150,8 @@ app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
 
 // 2) Registration done (deed registered, khatian not yet updated)
 app.post('/api/sale/:id/register', guard('sale.register'), (req, res) => {
-  const tx = findTx(req.params.id);
-  if (!tx || tx.state !== 'active') return res.status(404).json({ error: 'Active transaction not found' });
+  const tx = activeTxOrError(req, res);
+  if (!tx) return;
   if (tx.reg_status === 'done') return res.status(400).json({ error: 'Deed is already registered' });
   tx.reg_status = 'done';
   tx.reg_date = new Date().toISOString();
@@ -139,8 +163,8 @@ app.post('/api/sale/:id/register', guard('sale.register'), (req, res) => {
 // 3) Mutation done: owner changes, plot unlocks, buyer is the new owner.
 // This is the ONLY code path that changes current_owner (AC Land Officer only).
 app.post('/api/sale/:id/mutate', guard('sale.mutate'), (req, res) => {
-  const tx = findTx(req.params.id);
-  if (!tx || tx.state !== 'active') return res.status(404).json({ error: 'Active transaction not found' });
+  const tx = activeTxOrError(req, res);
+  if (!tx) return;
   if (tx.reg_status !== 'done') return res.status(400).json({ error: 'Registration must be completed before mutation' });
   const plot = findPlot(tx.plot_id);
   plot.current_owner = tx.buyer;
@@ -153,10 +177,39 @@ app.post('/api/sale/:id/mutate', guard('sale.mutate'), (req, res) => {
   res.json({ transaction: tx, plot });
 });
 
-// 4) Cancel: unlock, owner unchanged
+// 3b) Mutation rejected (AC Land Officer only): the deed stays registered, the owner does NOT change,
+// and the plot is NOT unlocked. Transaction -> 'disputed', plot -> 'Disputed' (Red). Resolving a dispute
+// (court order etc.) is outside this prototype.
+app.post('/api/sale/:id/reject-mutation', guard('sale.reject_mutation'), (req, res) => {
+  const tx = activeTxOrError(req, res);
+  if (!tx) return;
+  if (tx.reg_status !== 'done') return res.status(400).json({ error: 'Only a registered deed can have its mutation rejected. Cancel the sale instead.' });
+  const reason = text(req.body.reason);
+  if (!reason) return invalid(res, ['reason']);
+  const plot = findPlot(tx.plot_id);
+  plot.status = 'Disputed';
+  tx.mutation_status = 'rejected';
+  tx.state = 'disputed';
+  tx.dispute_reason = reason;
+  tx.mutation_date = new Date().toISOString();
+  db.save();
+  ledger.append(plot.id, 'MUTATION_REJECTED', { tx_id: tx.id, reason, by_role: req.role });
+  res.json({ transaction: tx, plot });
+});
+
+// 4) Cancel: only BEFORE the deed is registered. Unlocks, owner unchanged.
+// A registered deed cannot be cancelled here: otherwise the seller could sell the same plot again.
 app.post('/api/sale/:id/cancel', guard('sale.cancel'), (req, res) => {
-  const tx = findTx(req.params.id);
-  if (!tx || tx.state !== 'active') return res.status(404).json({ error: 'Active transaction not found' });
+  const tx = activeTxOrError(req, res);
+  if (!tx) return;
+  if (tx.reg_status === 'done') {
+    return res.status(409).json({
+      error: 'A registered deed cannot be cancelled. Only the AC Land Officer can complete or reject the mutation.',
+      code: 'REGISTERED_DEED_CANNOT_CANCEL',
+      bn: 'দলিল ইতিমধ্যে নিবন্ধিত হয়েছে, তাই সাধারণভাবে বাতিল করা যাবে না। শুধু এসি ল্যান্ড অফিসার নামজারি সম্পন্ন বা বাতিল করতে পারবেন। জমিটি লক থাকবে।',
+      en: 'The deed is already registered, so it cannot be cancelled here. Only the AC Land Officer can complete or reject the mutation. The plot stays locked.',
+    });
+  }
   const plot = findPlot(tx.plot_id);
   plot.status = 'Free';
   tx.state = 'cancelled';
@@ -197,11 +250,11 @@ app.post('/api/mortgage/release', guard('mortgage.release'), (req, res) => {
   res.json({ released });
 });
 
-// ---- Dashboard: registered deeds waiting for mutation ----
+// ---- Dashboard: registered deeds waiting for mutation (including disputed ones) ----
 app.get('/api/gap', (req, res) => {
   const now = Date.now();
   const rows = db.get().transactions
-    .filter((t) => t.state === 'active' && t.reg_status === 'done' && t.mutation_status !== 'done')
+    .filter((t) => ['active', 'disputed'].includes(t.state) && t.reg_status === 'done' && t.mutation_status !== 'done')
     .map((t) => ({ ...t, days_waiting: Math.floor((now - new Date(t.reg_date).getTime()) / 86400000) }));
   res.json(rows);
 });

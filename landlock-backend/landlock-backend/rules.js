@@ -1,6 +1,18 @@
 // Rules engine: every check returns a level (red/yellow/green) and a reason in Bangla + English.
 const RED = 'red', YELLOW = 'yellow', GREEN = 'green';
 
+// A registered deed whose mutation the AC Land Officer rejected. The plot stays locked: neither the old
+// owner nor the deed buyer can sell or mortgage it until the dispute is resolved outside the prototype.
+const disputedReason = (tx) => ({
+  level: RED, code: 'PLOT_DISPUTED',
+  bn: tx
+    ? `বিরোধপূর্ণ জমি: দলিল ${tx.deed_no} (${tx.seller} → ${tx.buyer}) নিবন্ধিত হয়েছে, কিন্তু এসি ল্যান্ড অফিসার নামজারি বাতিল করেছেন। কারণ: ${tx.dispute_reason}। বিরোধ নিষ্পত্তি না হওয়া পর্যন্ত বিক্রয় বা বন্ধক করা যাবে না। (এটি সতর্কতা, প্রতারণার প্রমাণ নয়।)`
+    : 'এই জমি বিরোধপূর্ণ (নামজারি বাতিল হয়েছে)। বিরোধ নিষ্পত্তি না হওয়া পর্যন্ত বিক্রয় বা বন্ধক করা যাবে না।',
+  en: tx
+    ? `Disputed plot: deed ${tx.deed_no} (${tx.seller} → ${tx.buyer}) was registered, but the AC Land Officer rejected the mutation. Reason: ${tx.dispute_reason}. No sale or mortgage is allowed until the dispute is resolved. (This is a warning, not proof of fraud.)`
+    : 'This plot is disputed (mutation was rejected). No sale or mortgage is allowed until the dispute is resolved.',
+});
+
 // Deed numbers are compared without spaces/case, so "d-1" and " D-1 " count as the same deed.
 const normDeed = (v) => String(v).trim().toUpperCase();
 
@@ -16,6 +28,7 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
       en: 'A sale is already in progress on this plot. No new sale or mortgage can be registered.',
     });
   }
+  if (plot.status === 'Disputed') reasons.push(disputedReason());
   if (plot.mortgage) {
     reasons.push({
       level: RED, code: 'PLOT_MORTGAGED',
@@ -66,6 +79,7 @@ function checkMortgage(plot, owner, bank) {
       en: 'A sale is in progress on this plot. A mortgage cannot be registered now.',
     });
   }
+  if (plot.status === 'Disputed') reasons.push(disputedReason());
   if (plot.mortgage) {
     reasons.push({
       level: RED, code: 'DOUBLE_MORTGAGE',
@@ -112,7 +126,7 @@ function checkSurveyChain(plot) {
 }
 
 // Overall status of a plot, shown on the "check before you buy" page.
-function assessPlot(plot, activeTx, ledgerStatus) {
+function assessPlot(plot, activeTx, ledgerStatus, disputedTx) {
   const reasons = [];
 
   if (!ledgerStatus.valid) {
@@ -122,6 +136,8 @@ function assessPlot(plot, activeTx, ledgerStatus) {
       en: 'Warning: tampering detected in the record history. Data cannot be trusted.',
     });
   }
+
+  if (plot.status === 'Disputed') reasons.push(disputedReason(disputedTx));
 
   if (plot.status === 'Pending' && activeTx) {
     if (activeTx.reg_status === 'done' && activeTx.mutation_status !== 'done') {

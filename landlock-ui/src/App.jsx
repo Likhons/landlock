@@ -13,6 +13,7 @@ const EVENT_LABEL = {
   SALE_BLOCKED: { bn: 'বিক্রয় আটকানো হয়েছে', en: 'Sale blocked' },
   REGISTRATION_DONE: { bn: 'দলিল নিবন্ধিত', en: 'Deed registered' },
   MUTATION_DONE: { bn: 'নামজারি সম্পন্ন', en: 'Mutation done' },
+  MUTATION_REJECTED: { bn: 'নামজারি বাতিল (বিরোধপূর্ণ)', en: 'Mutation rejected (Disputed)' },
   SALE_CANCELLED: { bn: 'বিক্রয় বাতিল', en: 'Sale cancelled' },
   MORTGAGE_CREATED: { bn: 'বন্ধক নিবন্ধিত', en: 'Mortgage registered' },
   MORTGAGE_BLOCKED: { bn: 'বন্ধক আটকানো হয়েছে', en: 'Mortgage blocked' },
@@ -141,6 +142,7 @@ export default function App() {
   const [gap, setGap] = useState([])
   const [mform, setMform] = useState({ owner: '', bank: '', loan_ref: '' })
   const [mresult, setMresult] = useState(null)
+  const [rejectReason, setRejectReason] = useState('')
   // DEMO ROLE SWITCH: always starts as the least-privileged Buyer (not saved between visits)
   const [role, setRole] = useState('buyer')
   const [roles, setRoles] = useState(null)
@@ -250,11 +252,11 @@ export default function App() {
     load(selectedId)
   }
 
-  const action = async (type) => {
+  const action = async (type, body) => {
     const txId = data.active_transaction.id
-    const res = await post(`/sale/${txId}/${type}`, {}, role)
+    const res = await post(`/sale/${txId}/${type}`, body || {}, role)
     if (res.status >= 400) setResult({ status: res.status, body: res.body, src: 'tx' })
-    else setResult(null)
+    else { setResult(null); setRejectReason('') }
     const d = await load(selectedId)
     if (d) setForm((f) => ({ ...f, seller: d.plot.current_owner, deed_area: String(d.plot.area) }))
   }
@@ -365,7 +367,11 @@ export default function App() {
             <div>{tr('বর্তমান মালিক', 'Current owner')}: <b>{data.plot.current_owner}</b></div>
             <div>
               {tr('অবস্থা', 'Status')}:{' '}
-              <b>{data.plot.status === 'Pending' ? tr('🔒 Pending (লক)', '🔒 Pending (locked)') : tr('🔓 Free (মুক্ত)', '🔓 Free')}</b>
+              <b>
+                {data.plot.status === 'Pending' ? tr('🔒 Pending (লক)', '🔒 Pending (locked)')
+                  : data.plot.status === 'Disputed' ? tr('⛔ Disputed (বিরোধপূর্ণ, লক)', '⛔ Disputed (locked)')
+                    : tr('🔓 Free (মুক্ত)', '🔓 Free')}
+              </b>
             </div>
             {data.plot.mortgage && (
               <div>
@@ -394,11 +400,48 @@ export default function App() {
                 <button {...gated('sale.register', btn('#2563eb'))} onClick={() => action('register')}>{tr('দলিল নিবন্ধন সম্পন্ন', 'Mark deed registered')}</button>
               )}
               {tx.reg_status === 'done' && (
-                <button {...gated('sale.mutate', btn('#2e9d57'))} onClick={() => action('mutate')}>{tr('নামজারি সম্পন্ন (মালিক পরিবর্তন)', 'Complete mutation (change owner)')}</button>
+                <>
+                  <button {...gated('sale.mutate', btn('#2e9d57'))} onClick={() => action('mutate')}>{tr('নামজারি সম্পন্ন (মালিক পরিবর্তন)', 'Complete mutation (change owner)')}</button>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 4 }}>
+                    <div style={{ flex: 1 }}>
+                      {tr('নামজারি বাতিলের কারণ', 'Reason for rejecting mutation')}
+                      <input style={input} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder={tr('যেমন: বিক্রেতার স্বাক্ষর নিয়ে আপত্তি', 'e.g. seller signature disputed')} />
+                    </div>
+                    <button {...gated('sale.reject_mutation', btn('#b91c1c'))} onClick={() => action('reject-mutation', { reason: rejectReason })}>
+                      ⛔ {tr('নামজারি বাতিল (বিরোধপূর্ণ)', 'Reject mutation (Disputed)')}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#555', marginTop: 6 }}>
+                    ℹ️ {tr(
+                      'দলিল নিবন্ধিত হয়েছে, তাই এখন আর সাধারণভাবে বাতিল করা যাবে না। শুধু এসি ল্যান্ড অফিসার নামজারি সম্পন্ন বা বাতিল করতে পারবেন।',
+                      'The deed is registered, so the sale can no longer be cancelled. Only the AC Land Officer can complete or reject the mutation.',
+                    )}
+                  </div>
+                </>
               )}
-              <button {...gated('sale.cancel', btn('#777'))} onClick={() => action('cancel')}>{tr('বিক্রয় বাতিল', 'Cancel sale')}</button>
+              {/* After registration Cancel is hidden; with "Enable blocked buttons" it stays visible so the server's refusal can be shown */}
+              {(tx.reg_status !== 'done' || showBlocked) && (
+                <button {...gated('sale.cancel', btn('#777'))} onClick={() => action('cancel')}>{tr('বিক্রয় বাতিল', 'Cancel sale')}</button>
+              )}
               {needs(tx.reg_status === 'done' ? 'sale.mutate' : 'sale.register')}
               {result && result.src === 'tx' && <ErrorBox body={result.body} lang={lang} />}
+            </div>
+          )}
+
+          {/* Disputed: mutation rejected, plot stays locked */}
+          {data.disputed_transaction && (
+            <div style={{ ...card, border: '2px solid #d93a3a', background: '#fdeaea', color: '#8f1f1f' }}>
+              <h3 style={{ marginTop: 0 }}>⛔ {tr('বিরোধপূর্ণ লেনদেন (নামজারি বাতিল)', 'Disputed transaction (mutation rejected)')}</h3>
+              <div>
+                {data.disputed_transaction.seller} → {data.disputed_transaction.buyer} | {tr('দলিল নং', 'Deed no.')}: {data.disputed_transaction.deed_no} | {tr('নিবন্ধন', 'Registration')}: <b>{stepLabel('done')}</b> | {tr('নামজারি', 'Mutation')}: <b>{tr('বাতিল', 'Rejected')}</b>
+              </div>
+              <div style={{ marginTop: 6 }}>{tr('কারণ', 'Reason')}: <b>{data.disputed_transaction.dispute_reason}</b></div>
+              <div style={{ fontSize: 13, marginTop: 6 }}>
+                {tr(
+                  'জমিটি লক থাকবে। বিরোধ নিষ্পত্তি (যেমন আদালতের আদেশ) এই প্রোটোটাইপের বাইরে।',
+                  'The plot stays locked. Resolving the dispute (e.g. a court order) is outside this prototype.',
+                )}
+              </div>
             </div>
           )}
 
@@ -490,6 +533,7 @@ export default function App() {
             {gap.length === 0 && <div style={{ color: '#777' }}>{tr('কোনো ঝুঁকিপূর্ণ দলিল নেই।', 'No risky deeds.')}</div>}
             {gap.map((g) => (
               <div key={g.id} style={{ borderTop: '1px solid #eee', padding: '8px 0', fontSize: 14 }}>
+                {g.state === 'disputed' && <b style={{ color: '#8f1f1f' }}>⛔ {tr('বিরোধপূর্ণ', 'Disputed')} | </b>}
                 Plot {g.plot_id}: {g.seller} → {g.buyer} | {tr('দলিল', 'Deed')} {g.deed_no} | {g.days_waiting} {tr('দিন অপেক্ষায়', 'days waiting')}
               </div>
             ))}

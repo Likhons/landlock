@@ -141,8 +141,17 @@ function replay(ledger) {
         tx.mutation_status = 'done';
         tx.state = 'completed';
         break;
+      case 'MUTATION_REJECTED':
+        if (!activeTx() || tx.reg_status !== 'done') return fail('mutation rejected without a registered deed');
+        if (!d.reason) return fail('mutation rejected without a reason');
+        tx.mutation_status = 'rejected';
+        tx.state = 'disputed';
+        tx.dispute_reason = d.reason;
+        plot.status = 'Disputed';
+        break;
       case 'SALE_CANCELLED':
         if (!activeTx()) return fail('no matching active sale');
+        if (tx.reg_status === 'done') return fail('a registered deed cannot be cancelled');
         tx.state = 'cancelled';
         plot.status = 'Free';
         break;
@@ -160,7 +169,7 @@ function replay(ledger) {
   return { plots, txs };
 }
 
-const TX_FIELDS = ['plot_id', 'seller', 'buyer', 'deed_no', 'deed_area', 'reg_status', 'mutation_status', 'state'];
+const TX_FIELDS = ['plot_id', 'seller', 'buyer', 'deed_no', 'deed_area', 'reg_status', 'mutation_status', 'state', 'dispute_reason'];
 
 function checkState(ledger) {
   const r = replay(ledger);

@@ -224,6 +224,77 @@ async function validationTests() {
   await post('/dev/reset');
 }
 
+async function disputeTests() {
+  section('Registered deed: no cancel, AC Land completes or rejects (Disputed)');
+  await post('/dev/reset');
+  const plot = async (id) => get(`/plots/${id}`);
+
+  // Regression: the old bug let a registered deed be cancelled and the seller sell again
+  let r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Buyer1', deed_no: 'D-X1', deed_area: 20 }, SR);
+  const tx1 = r.body.transaction.id;
+  await post(`/sale/${tx1}/register`, {}, SR);
+  r = await post(`/sale/${tx1}/cancel`, {}, SR);
+  ok('X1. Sub-Registrar cannot cancel a registered deed (409)', r.status === 409 && r.body.code === 'REGISTERED_DEED_CANNOT_CANCEL' && r.body.bn && r.body.en);
+  let p = await plot('P5');
+  ok('X2. After the refused cancel: plot still Pending, sale still active, owner unchanged',
+    p.plot.status === 'Pending' && p.active_transaction && p.active_transaction.id === tx1 && p.plot.current_owner === 'Nasrin');
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Buyer2', deed_no: 'D-X2', deed_area: 20 }, SR);
+  ok('X3. Seller cannot sell the registered plot again (old double-sell bug)', r.status === 409 && r.body.reasons.some((x) => x.code === 'PLOT_LOCKED'));
+  ok('X4. AC Land / Buyer cannot use cancel either (403)',
+    (await post(`/sale/${tx1}/cancel`, {}, AC)).status === 403 && (await post(`/sale/${tx1}/cancel`, {}, BUYER)).status === 403);
+
+  r = await post(`/sale/${tx1}/reject-mutation`, { reason: 'Seller signature disputed' }, SR);
+  ok('X5. Sub-Registrar cannot reject a mutation (403)', r.status === 403 && r.body.code === 'PERMISSION_DENIED');
+  ok('X6. Buyer cannot reject a mutation (403)', (await post(`/sale/${tx1}/reject-mutation`, { reason: 'x' }, BUYER)).status === 403);
+  r = await post(`/sale/${tx1}/reject-mutation`, { reason: '   ' }, AC);
+  ok('X7. Rejection needs a reason (400)', r.status === 400 && r.body.fields.includes('reason'));
+
+  const u = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-X3', deed_area: 10 }, SR);
+  r = await post(`/sale/${u.body.transaction.id}/reject-mutation`, { reason: 'x' }, AC);
+  ok('X8. Cannot reject the mutation of an unregistered deed (400)', r.status === 400);
+  ok('X9. Unregistered sale can still be cancelled normally', (await post(`/sale/${u.body.transaction.id}/cancel`, {}, SR)).status === 200
+    && (await plot('P1')).plot.status === 'Free');
+
+  r = await post(`/sale/${tx1}/reject-mutation`, { reason: 'Seller signature disputed' }, AC);
+  ok('X10. AC Land Officer rejects the mutation (200), transaction disputed',
+    r.status === 200 && r.body.transaction.state === 'disputed' && r.body.transaction.mutation_status === 'rejected');
+  p = await plot('P5');
+  ok('X11. Plot Disputed, owner unchanged, NOT unlocked', p.plot.status === 'Disputed' && p.plot.current_owner === 'Nasrin');
+  const dr = p.risk.reasons.find((x) => x.code === 'PLOT_DISPUTED');
+  ok('X12. Risk is Red with the reason in Bangla and English', p.risk.level === 'red' && dr && /Seller signature disputed/.test(dr.en) && /Seller signature disputed/.test(dr.bn));
+  ok('X13. Plot API returns the disputed transaction', p.disputed_transaction && p.disputed_transaction.id === tx1 && p.active_transaction === null);
+
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Buyer3', deed_no: 'D-X4', deed_area: 20 }, SR);
+  ok('X14. Previous seller cannot sell the disputed plot (PLOT_DISPUTED)', r.status === 409 && r.body.reasons.some((x) => x.code === 'PLOT_DISPUTED'));
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Buyer1', buyer: 'Buyer3', deed_no: 'D-X5', deed_area: 20 }, SR);
+  ok('X15. Deed buyer cannot sell it either', r.status === 409 && r.body.reasons.some((x) => x.code === 'PLOT_DISPUTED'));
+  r = await post('/mortgage/create', { plot_id: 'P5', owner: 'Nasrin', bank: 'Sonali Bank', loan_ref: 'LN-X' }, SR);
+  ok('X16. Mortgage on the disputed plot blocked', r.status === 409 && r.body.reasons.some((x) => x.code === 'PLOT_DISPUTED'));
+  const tryStep = (step, role) => post(`/sale/${tx1}/${step}`, step === 'reject-mutation' ? { reason: 'again' } : {}, role);
+  const steps = await Promise.all([tryStep('mutate', AC), tryStep('cancel', SR), tryStep('register', SR), tryStep('reject-mutation', AC)]);
+  ok('X17. No further step on a disputed transaction (409 TX_DISPUTED)', steps.every((s) => s.status === 409 && s.body.code === 'TX_DISPUTED'));
+  ok('X18. Gap dashboard still lists the disputed deed', (await get('/gap')).some((g) => g.id === tx1 && g.state === 'disputed'));
+  const hist = p.history.find((h) => h.event_type === 'MUTATION_REJECTED');
+  ok('X19. Signed MUTATION_REJECTED event records role and reason', hist && hist.signature && hist.data.by_role === AC && hist.data.reason === 'Seller signature disputed');
+  ok('X20. Ledger valid (replay agrees with the disputed state)', (await get('/ledger/verify')).valid === true);
+
+  // Restart: disputed state survives, and a silent unlock edited into data.json is caught
+  await stop(); await start();
+  p = await plot('P5');
+  ok('X21. After restart: still Disputed and ledger valid', p.plot.status === 'Disputed' && (await get('/ledger/verify')).valid === true);
+  await stop();
+  const d = readData();
+  d.plots.find((x) => x.id === 'P5').status = 'Free';
+  d.transactions.find((t) => t.id === tx1).state = 'cancelled';
+  writeData(d);
+  await start();
+  const v = await get('/ledger/verify');
+  ok('X22. Silently unlocking the disputed plot in data.json is detected', !v.valid && v.kind === 'state');
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Buyer4', deed_no: 'D-X6', deed_area: 20 }, SR);
+  ok('X23. ...and the seller still cannot sell (write refused, 423)', r.status === 423);
+  await post('/dev/reset');
+}
+
 async function integrityTests() {
   section('Ledger integrity (live server, attacker edits the stored data)');
   // Build a ledger with a few events: GENESIS, SALE_INITIATED, REGISTRATION_DONE, MUTATION_DONE, MORTGAGE_CREATED
@@ -341,6 +412,7 @@ async function restartTests() {
     await storyTests();
     await roleTests();
     await validationTests();
+    await disputeTests();
     await integrityTests();
     await restartTests();
   } catch (e) {
