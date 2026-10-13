@@ -17,6 +17,19 @@ const EVENT_LABEL = {
   MORTGAGE_CREATED: { bn: 'বন্ধক নিবন্ধিত', en: 'Mortgage registered' },
   MORTGAGE_BLOCKED: { bn: 'বন্ধক আটকানো হয়েছে', en: 'Mortgage blocked' },
   MORTGAGE_RELEASED: { bn: 'বন্ধক মুক্ত', en: 'Mortgage released' },
+  GENESIS: { bn: 'শুরুর রেজিস্টার (Genesis)', en: 'Starting register (Genesis)' },
+}
+
+// Fallback labels until /api/roles loads. Permissions always come from the server.
+const ROLE_LABEL = {
+  buyer: { bn: 'ক্রেতা', en: 'Buyer' },
+  sub_registrar: { bn: 'সাব-রেজিস্ট্রার', en: 'Sub-Registrar' },
+  ac_land: { bn: 'এসি ল্যান্ড অফিসার', en: 'AC Land Officer' },
+}
+
+const SAMPLE_BADGE = {
+  bn: 'ডেমো / নমুনা তথ্য: সরকারি খতিয়ান রেকর্ড নয়',
+  en: 'DEMO / SAMPLE DATA: not verified official khatian records',
 }
 
 const EXPLAINED = ['sale', 'inheritance', 'court', 'gift']
@@ -36,13 +49,33 @@ const btn = (bg) => ({
   padding: '10px 14px', fontSize: 15, cursor: 'pointer', marginRight: 8, marginTop: 8,
 })
 
-async function post(path, body) {
+// DEMO: the chosen role is sent as a header. The server checks it on every write,
+// but a header is not authentication (anyone can send any role).
+async function post(path, body, role) {
   const r = await fetch(`${API}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(role ? { 'X-Demo-Role': role } : {}) },
     body: JSON.stringify(body || {}),
   })
   return { status: r.status, body: await r.json() }
+}
+
+const sampleBadge = (lang) => (
+  <div style={{ display: 'inline-block', fontSize: 12, fontWeight: 700, color: '#7a5c00', background: '#fff6dd', border: '1px dashed #d9a400', borderRadius: 6, padding: '2px 8px', margin: '4px 0 8px' }}>
+    {SAMPLE_BADGE[lang]}
+  </div>
+)
+
+// Error box for 403 (permission denied), 423 (ledger integrity) and other API errors
+function ErrorBox({ body, lang }) {
+  const denied = body.code === 'PERMISSION_DENIED'
+  return (
+    <div style={{ background: '#fdeaea', border: '2px solid #d93a3a', color: '#8f1f1f', borderRadius: 8, padding: 12, marginTop: 12 }}>
+      {denied && <b>⛔ {lang === 'bn' ? 'অনুমতি নেই (সার্ভার আটকেছে)' : 'Permission denied (blocked by the server)'}<br /></b>}
+      {body.code === 'INTEGRITY_FAILED' && <b>🛑 {lang === 'bn' ? 'Ledger যাচাই ব্যর্থ' : 'Ledger integrity check failed'}<br /></b>}
+      {body[lang] || body.error}
+    </div>
+  )
 }
 
 function SurveyTimeline({ plot, lang }) {
@@ -51,7 +84,8 @@ function SurveyTimeline({ plot, lang }) {
   if (chain.length === 0) return null
   return (
     <div style={card}>
-      <h3 style={{ marginTop: 0 }}>📜 {tr('জরিপ ইতিহাস', 'Survey history')} (CS → SA → RS → BS)</h3>
+      <h3 style={{ marginTop: 0, marginBottom: 0 }}>📜 {tr('জরিপ ইতিহাস', 'Survey history')} (CS → SA → RS → BS)</h3>
+      {sampleBadge(lang)}
       {chain.map((s, i) => {
         const prev = chain[i - 1]
         const ownerChanged = prev && s.owner !== prev.owner
@@ -107,8 +141,31 @@ export default function App() {
   const [gap, setGap] = useState([])
   const [mform, setMform] = useState({ owner: '', bank: '', loan_ref: '' })
   const [mresult, setMresult] = useState(null)
+  // DEMO ROLE SWITCH: always starts as the least-privileged Buyer (not saved between visits)
+  const [role, setRole] = useState('buyer')
+  const [roles, setRoles] = useState(null)
+  const [showBlocked, setShowBlocked] = useState(false)
 
   const tr = (bn, en) => (lang === 'bn' ? bn : en)
+  const roleLabel = (r) => ((roles && roles.roles[r]) || ROLE_LABEL[r])[lang]
+  const can = (perm) => Boolean(roles && roles.roles[role] && roles.roles[role].permissions.includes(perm))
+  // Who may do `perm` (for the "requires ..." hint)
+  const whoCan = (perm) => (roles ? Object.keys(roles.roles).filter((r) => roles.roles[r].permissions.includes(perm)).map(roleLabel).join(' / ') : '')
+  // Buttons for actions this role can't do are disabled, unless "show blocked actions" is on
+  // (then the click goes to the server, which refuses it with 403).
+  const gated = (perm, style) => {
+    const off = !can(perm) && !showBlocked
+    return {
+      disabled: off,
+      title: can(perm) ? undefined : tr(`প্রয়োজন: ${whoCan(perm)}`, `Requires: ${whoCan(perm)}`),
+      style: off ? { ...style, opacity: 0.4, cursor: 'not-allowed' } : style,
+    }
+  }
+  const needs = (perm) => !can(perm) && (
+    <div style={{ fontSize: 13, color: '#8f1f1f', marginTop: 6 }}>
+      🔒 {tr(`${roleLabel(role)} এটি করতে পারবেন না। প্রয়োজন: ${whoCan(perm)}`, `${roleLabel(role)} cannot do this. Requires: ${whoCan(perm)}`)}
+    </div>
+  )
   const changeLang = (l) => {
     setLang(l)
     try { localStorage.setItem('landlock_lang', l) } catch (e) { /* ignore */ }
@@ -129,6 +186,7 @@ export default function App() {
 
   useEffect(() => {
     fetch(`${API}/plots`).then((r) => r.json()).then(setPlots).catch(connectError)
+    fetch(`${API}/roles`).then((r) => r.json()).then(setRoles).catch(() => {})
   }, [])
 
   // when a plot is selected: load it and pre-fill the seller + area
@@ -154,20 +212,27 @@ export default function App() {
     await load(selectedId)
   }
 
+  // More attacker simulations (delete tail, change owner directly, ...)
+  const attack = async (type) => {
+    const res = await post('/dev/attack', { type })
+    if (res.status >= 400) setResult({ status: res.status, body: { error: res.body.error } })
+    await load(selectedId)
+  }
+
   const submitMortgage = async () => {
     const res = await post('/mortgage/create', {
       plot_id: selectedId,
       owner: mform.owner || data.plot.current_owner,
       bank: mform.bank,
       loan_ref: mform.loan_ref,
-    })
+    }, role)
     setMresult(res)
     load(selectedId)
   }
 
   const releaseMortgage = async () => {
-    await post('/mortgage/release', { plot_id: selectedId })
-    setMresult(null)
+    const res = await post('/mortgage/release', { plot_id: selectedId }, role)
+    setMresult(res.status >= 400 ? res : null)
     load(selectedId)
   }
 
@@ -180,15 +245,15 @@ export default function App() {
   }
 
   const submitSale = async () => {
-    const res = await post('/sale/initiate', { plot_id: selectedId, ...form })
+    const res = await post('/sale/initiate', { plot_id: selectedId, ...form }, role)
     setResult(res)
     load(selectedId)
   }
 
   const action = async (type) => {
     const txId = data.active_transaction.id
-    const res = await post(`/sale/${txId}/${type}`)
-    if (res.status >= 400) setResult({ status: res.status, body: { error: res.body.error } })
+    const res = await post(`/sale/${txId}/${type}`, {}, role)
+    if (res.status >= 400) setResult({ status: res.status, body: res.body, src: 'tx' })
     else setResult(null)
     const d = await load(selectedId)
     if (d) setForm((f) => ({ ...f, seller: d.plot.current_owner, deed_area: String(d.plot.area) }))
@@ -201,6 +266,26 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: 720, margin: '0 auto', padding: 20 }}>
+      {/* DEMO ROLE SWITCH: not a login. The server enforces permissions on every write. */}
+      <div style={{ border: '2px dashed #7c3aed', background: '#f5f0ff', borderRadius: 10, padding: 10, marginBottom: 12 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <b style={{ color: '#5b21b6' }}>🎭 DEMO ROLE SWITCH</b>
+          <select value={role} onChange={(e) => { setRole(e.target.value); setResult(null); setMresult(null) }}>
+            {Object.keys(ROLE_LABEL).map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+          </select>
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={showBlocked} onChange={(e) => setShowBlocked(e.target.checked)} />{' '}
+            {tr('নিষিদ্ধ কাজের বোতামও চালু রাখুন (সার্ভারের বাধা দেখতে)', 'Enable blocked buttons (to see the server refuse them)')}
+          </label>
+        </div>
+        <div style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+          {tr(
+            'এটি আসল লগইন নয়। শুধু ডেমোর জন্য। বাস্তবে প্রয়োজন: আসল লগইন, নিরাপদ সেশন এবং যাচাই করা পরিচয়ের ভিত্তিতে সার্ভারে অনুমতি যাচাই।',
+            'This is NOT real authentication, only a demo. Production needs real login, secure sessions and server-side authorization based on verified identities.',
+          )}
+        </div>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 style={{ marginBottom: 0 }}>🔒 LandLock</h1>
         <div>
@@ -247,8 +332,8 @@ export default function App() {
         >
           {chain.valid
             ? tr(
-                '✅ Ledger অক্ষত আছে: hash chain ঠিক আছে এবং প্রতিটি এন্ট্রি রেজিস্ট্রির ডিজিটাল স্বাক্ষরে সাইন করা',
-                '✅ Ledger intact: hash chain is valid and every entry is signed by the registry',
+                '✅ Ledger অক্ষত আছে: hash chain ঠিক আছে, প্রতিটি এন্ট্রি রেজিস্ট্রির ডিজিটাল স্বাক্ষরে সাইন করা, trusted checkpoint মিলেছে এবং জমির রেকর্ড Ledger-এর সাথে মিলছে',
+                '✅ Ledger intact: hash chain is valid, every entry is signed by the registry, it matches the trusted checkpoint, and the land records match the ledger',
               )
             : chain.kind === 'signature'
               ? tr(
@@ -256,21 +341,24 @@ export default function App() {
                   `❌ Forgery detected! Hashes look fine but the digital signature is invalid. ${chain.reason}`,
                 )
               : tr(
-                  `❌ Chain ভেঙে গেছে! এন্ট্রি #${chain.brokenAt}-এ তথ্য পরিবর্তন ধরা পড়েছে।`,
-                  `❌ Chain broken! ${chain.reason}`,
+                  `❌ Ledger যাচাই ব্যর্থ (${chain.kind})${chain.brokenAt ? `, এন্ট্রি #${chain.brokenAt}` : ''}: ${chain.bn}`,
+                  `❌ Ledger check failed (${chain.kind}): ${chain.reason}`,
                 )}
         </div>
       )}
       <div>
         <button style={btn('#b45309')} onClick={tamper}>⚠️ {tr('Record tamper করুন (demo)', 'Tamper a record (demo)')}</button>
         <button style={btn('#9f1239')} onClick={smartTamper}>🕵️ {tr('Smart tamper (hash নতুন করে বানাবে)', 'Smart tamper (recomputes hashes)')}</button>
+        <button style={btn('#7f1d1d')} onClick={() => attack('truncate_tail')}>✂️ {tr('শেষ এন্ট্রি মুছুন (demo)', 'Delete last entry (demo)')}</button>
+        <button style={btn('#7f1d1d')} onClick={() => attack('owner_change')}>👤 {tr('P1-এর মালিক সরাসরি বদলান (demo)', 'Change P1 owner directly (demo)')}</button>
         <button style={btn('#555')} onClick={reset}>🔄 Reset (demo)</button>
       </div>
 
       {data && (
         <>
           <div style={card}>
-            <h3 style={{ marginTop: 0 }}>{tr('জমির তথ্য', 'Plot details')}</h3>
+            <h3 style={{ marginTop: 0, marginBottom: 0 }}>{tr('জমির তথ্য', 'Plot details')}</h3>
+            {sampleBadge(lang)}
             <div>{tr('মৌজা', 'Mouza')}: <b>{data.plot.mouza}</b></div>
             <div>{tr('খতিয়ান নং', 'Khatian no.')}: <b>{data.plot.khatian_no}</b> | {tr('দাগ নং', 'Dag no.')}: <b>{data.plot.dag_no}</b></div>
             <div>{tr('পরিমাণ', 'Area')}: <b>{data.plot.area} {tr('শতক', 'decimal')}</b></div>
@@ -303,12 +391,14 @@ export default function App() {
                 {tr('দলিল নং', 'Deed no.')}: {tx.deed_no} | {tr('নিবন্ধন', 'Registration')}: <b>{stepLabel(tx.reg_status)}</b> | {tr('নামজারি', 'Mutation')}: <b>{stepLabel(tx.mutation_status)}</b>
               </div>
               {tx.reg_status !== 'done' && (
-                <button style={btn('#2563eb')} onClick={() => action('register')}>{tr('দলিল নিবন্ধন সম্পন্ন', 'Mark deed registered')}</button>
+                <button {...gated('sale.register', btn('#2563eb'))} onClick={() => action('register')}>{tr('দলিল নিবন্ধন সম্পন্ন', 'Mark deed registered')}</button>
               )}
               {tx.reg_status === 'done' && (
-                <button style={btn('#2e9d57')} onClick={() => action('mutate')}>{tr('নামজারি সম্পন্ন (মালিক পরিবর্তন)', 'Complete mutation (change owner)')}</button>
+                <button {...gated('sale.mutate', btn('#2e9d57'))} onClick={() => action('mutate')}>{tr('নামজারি সম্পন্ন (মালিক পরিবর্তন)', 'Complete mutation (change owner)')}</button>
               )}
-              <button style={btn('#777')} onClick={() => action('cancel')}>{tr('বিক্রয় বাতিল', 'Cancel sale')}</button>
+              <button {...gated('sale.cancel', btn('#777'))} onClick={() => action('cancel')}>{tr('বিক্রয় বাতিল', 'Cancel sale')}</button>
+              {needs(tx.reg_status === 'done' ? 'sale.mutate' : 'sale.register')}
+              {result && result.src === 'tx' && <ErrorBox body={result.body} lang={lang} />}
             </div>
           )}
 
@@ -321,7 +411,8 @@ export default function App() {
               <div>{tr('দলিল নং', 'Deed no.')}<input style={input} value={form.deed_no} onChange={setField('deed_no')} placeholder="e.g. D-1001" /></div>
               <div>{tr('দলিলের পরিমাণ (শতক)', 'Deed area (decimal)')}<input style={input} value={form.deed_area} onChange={setField('deed_area')} /></div>
             </div>
-            <button style={btn('#111')} onClick={submitSale}>{tr('বিক্রয় যাচাই ও শুরু করুন', 'Verify and start sale')}</button>
+            <button {...gated('sale.initiate', btn('#111'))} onClick={submitSale}>{tr('বিক্রয় যাচাই ও শুরু করুন', 'Verify and start sale')}</button>
+            {needs('sale.initiate')}
 
             {result && result.body.blocked && (
               <div style={{ background: '#fdeaea', border: '2px solid #d93a3a', color: '#8f1f1f', borderRadius: 8, padding: 12, marginTop: 12 }}>
@@ -336,9 +427,7 @@ export default function App() {
                 ✅ {tr('যাচাই সফল। জমিটি এখন Pending (লক) অবস্থায় আছে।', 'Checks passed. The plot is now Pending (locked).')}
               </div>
             )}
-            {result && result.body.error && (
-              <div style={{ background: '#fdeaea', borderRadius: 8, padding: 12, marginTop: 12 }}>{result.body.error}</div>
-            )}
+            {result && result.body.error && result.src !== 'tx' && <ErrorBox body={result.body} lang={lang} />}
           </div>
 
           {/* Bank mortgage */}
@@ -351,7 +440,7 @@ export default function App() {
                   <>This plot is mortgaged to <b>{data.plot.mortgage.bank}</b>.</>,
                 )}
                 <div>
-                  <button style={btn('#777')} onClick={releaseMortgage}>{tr('বন্ধক মুক্ত করুন', 'Release mortgage')}</button>
+                  <button {...gated('mortgage.release', btn('#777'))} onClick={releaseMortgage}>{tr('বন্ধক মুক্ত করুন', 'Release mortgage')}</button>
                 </div>
               </div>
             ) : (
@@ -362,7 +451,8 @@ export default function App() {
               <div>{tr('ব্যাংক', 'Bank')}<input style={input} value={mform.bank} onChange={(e) => setMform({ ...mform, bank: e.target.value })} placeholder="e.g. Sonali Bank" /></div>
               <div>{tr('ঋণ নং', 'Loan no.')}<input style={input} value={mform.loan_ref} onChange={(e) => setMform({ ...mform, loan_ref: e.target.value })} placeholder="e.g. LN-101" /></div>
             </div>
-            <button style={btn('#0f766e')} onClick={submitMortgage}>{tr('বন্ধক যাচাই ও নিবন্ধন করুন', 'Verify and register mortgage')}</button>
+            <button {...gated('mortgage.create', btn('#0f766e'))} onClick={submitMortgage}>{tr('বন্ধক যাচাই ও নিবন্ধন করুন', 'Verify and register mortgage')}</button>
+            {needs('mortgage.create')}
 
             {mresult && mresult.body.blocked && (
               <div style={{ background: '#fdeaea', border: '2px solid #d93a3a', color: '#8f1f1f', borderRadius: 8, padding: 12, marginTop: 12 }}>
@@ -377,9 +467,7 @@ export default function App() {
                 ✅ {tr('বন্ধক নিবন্ধিত হয়েছে।', 'Mortgage registered.')}
               </div>
             )}
-            {mresult && mresult.body.error && (
-              <div style={{ background: '#fdeaea', borderRadius: 8, padding: 12, marginTop: 12 }}>{mresult.body.error}</div>
-            )}
+            {mresult && mresult.body.error && <ErrorBox body={mresult.body} lang={lang} />}
           </div>
 
           <div style={card}>
@@ -391,6 +479,7 @@ export default function App() {
                 <div style={{ color: '#777' }}>
                   {new Date(h.timestamp).toLocaleString(locale)} | hash: {h.hash.slice(0, 12)}...
                   {h.signature && <> | 🔏 sig: {h.signature.slice(0, 10)}...</>}
+                  {h.data && h.data.by_role && <> | 👤 {roleLabel(h.data.by_role)}</>}
                 </div>
               </div>
             ))}

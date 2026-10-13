@@ -23,6 +23,8 @@ id_ed25519*
 # JSON database written by db.js at runtime. Recreated from seed() in db.js when
 # missing; its ledger signatures are tied to the local (ignored) private key.
 landlock-backend/landlock-backend/data.json
+# Signed ledger checkpoint written by ledger.js (runtime state, tied to the local key)
+landlock-backend/landlock-backend/trusted/
 
 # ---- Dependencies -----------------------------------------------------------
 node_modules/

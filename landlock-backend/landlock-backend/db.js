@@ -1,8 +1,11 @@
 // Simple JSON-file database (no native modules, so it installs cleanly on Windows)
-// Survey history below is SAMPLE data for the prototype (CS -> SA -> RS -> BS).
+// DEMO/SAMPLE DATA: the plots, owners and survey history below (CS -> SA -> RS -> BS) are invented
+// for the prototype. They are NOT verified official khatian records.
+// seed() is also the trusted starting state: the ledger's GENESIS entry is checked against it.
 const fs = require('fs');
 const path = require('path');
-const FILE = path.join(__dirname, 'data.json');
+const DIR = process.env.LANDLOCK_DATA_DIR || __dirname;
+const FILE = path.join(DIR, 'data.json');
 
 function seed() {
   return {
@@ -66,4 +69,4 @@ function reset() { db = seed(); save(); }
 function get() { return db; }
 
 save();
-module.exports = { get, save, reset };
+module.exports = { get, save, reset, seed };

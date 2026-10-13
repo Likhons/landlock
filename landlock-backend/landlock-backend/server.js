@@ -3,6 +3,7 @@ const cors = require('cors');
 const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
+const rbac = require('./rbac');
 const { checkSale, checkMortgage, assessPlot } = require('./rules');
 
 const app = express();
@@ -14,6 +15,35 @@ const findTx = (id) => db.get().transactions.find((t) => t.id === Number(id));
 const activeTxFor = (plot_id) =>
   db.get().transactions.find((t) => t.plot_id === plot_id && t.state === 'active');
 
+// Every write goes through this: 1) the role must hold the permission (checked here on the server,
+// never only in the UI), 2) the ledger and land records must verify, so nothing is written on top of
+// tampered data. DEMO: the role is taken from the X-Demo-Role header, which is not authentication.
+const guard = (perm) => (req, res, next) => {
+  const { role, error } = rbac.resolveRole(req);
+  if (error) return res.status(400).json({ error, code: 'UNKNOWN_ROLE' });
+  if (!rbac.can(role, perm)) {
+    const label = rbac.ROLES[role];
+    const allowed = rbac.rolesWith(perm).map((r) => rbac.ROLES[r]);
+    return res.status(403).json({
+      error: `Permission denied: ${label.en} cannot perform ${perm}`,
+      code: 'PERMISSION_DENIED', role, required: perm,
+      bn: `অনুমতি নেই: ${label.bn} এই কাজটি করতে পারবেন না। প্রয়োজন: ${allowed.map((r) => r.bn).join(' / ') || '—'}।`,
+      en: `Permission denied: ${label.en} cannot do this. Required role: ${allowed.map((r) => r.en).join(' / ') || 'none'}.`,
+    });
+  }
+  const integrity = ledger.verify();
+  if (!integrity.valid) {
+    return res.status(423).json({
+      error: `Ledger integrity check failed, write refused. ${integrity.reason}`,
+      code: 'INTEGRITY_FAILED', ledger: integrity,
+      bn: `Ledger যাচাই ব্যর্থ, তাই কোনো পরিবর্তন করা হবে না। ${integrity.bn}`,
+      en: `Ledger integrity check failed, so no change is allowed. ${integrity.reason}`,
+    });
+  }
+  req.role = role;
+  next();
+};
+
 // ---- Read ----
 app.get('/api/plots', (req, res) => res.json(db.get().plots));
 
@@ -21,17 +51,21 @@ app.get('/api/plots/:id', (req, res) => {
   const plot = findPlot(req.params.id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
   const risk = assessPlot(plot, activeTxFor(plot.id), ledger.verify());
-  res.json({ plot, risk, history: ledger.forPlot(plot.id), active_transaction: activeTxFor(plot.id) || null });
+  res.json({
+    plot, risk, history: ledger.forPlot(plot.id), active_transaction: activeTxFor(plot.id) || null,
+    data_notice: 'DEMO/SAMPLE DATA - not verified official khatian records',
+  });
 });
 
 app.get('/api/transactions', (req, res) => res.json(db.get().transactions));
 app.get('/api/ledger', (req, res) => res.json(db.get().ledger));
 app.get('/api/ledger/verify', (req, res) => res.json(ledger.verify()));
 app.get('/api/ledger/public-key', (req, res) => res.json({ signer: keys.SIGNER, publicKey: keys.publicKey }));
+app.get('/api/roles', (req, res) => res.json(rbac.describe()));
 
 // ---- Sale workflow ----
 // 1) Initiate: run checks; if OK, lock the plot (Pending)
-app.post('/api/sale/initiate', (req, res) => {
+app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
   const { plot_id, seller, buyer, deed_no, deed_area } = req.body;
   const plot = findPlot(plot_id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
@@ -41,7 +75,7 @@ app.post('/api/sale/initiate', (req, res) => {
 
   const result = checkSale(plot, seller, deed_area);
   if (!result.allowed) {
-    ledger.append(plot.id, 'SALE_BLOCKED', { seller, buyer, deed_no, reasons: result.reasons.map((r) => r.code) });
+    ledger.append(plot.id, 'SALE_BLOCKED', { seller, buyer, deed_no, reasons: result.reasons.map((r) => r.code), by_role: req.role });
     return res.status(409).json({ blocked: true, ...result });
   }
 
@@ -54,23 +88,25 @@ app.post('/api/sale/initiate', (req, res) => {
   db.get().transactions.push(tx);
   plot.status = 'Pending';
   db.save();
-  ledger.append(plot.id, 'SALE_INITIATED', { tx_id: tx.id, seller, buyer, deed_no, deed_area: tx.deed_area });
+  ledger.append(plot.id, 'SALE_INITIATED', { tx_id: tx.id, seller, buyer, deed_no, deed_area: tx.deed_area, by_role: req.role });
   res.status(201).json({ blocked: false, ...result, transaction: tx });
 });
 
 // 2) Registration done (deed registered, khatian not yet updated)
-app.post('/api/sale/:id/register', (req, res) => {
+app.post('/api/sale/:id/register', guard('sale.register'), (req, res) => {
   const tx = findTx(req.params.id);
   if (!tx || tx.state !== 'active') return res.status(404).json({ error: 'Active transaction not found' });
+  if (tx.reg_status === 'done') return res.status(400).json({ error: 'Deed is already registered' });
   tx.reg_status = 'done';
   tx.reg_date = new Date().toISOString();
   db.save();
-  ledger.append(tx.plot_id, 'REGISTRATION_DONE', { tx_id: tx.id });
+  ledger.append(tx.plot_id, 'REGISTRATION_DONE', { tx_id: tx.id, by_role: req.role });
   res.json(tx);
 });
 
-// 3) Mutation done: owner changes, plot unlocks, buyer is the new owner
-app.post('/api/sale/:id/mutate', (req, res) => {
+// 3) Mutation done: owner changes, plot unlocks, buyer is the new owner.
+// This is the ONLY code path that changes current_owner (AC Land Officer only).
+app.post('/api/sale/:id/mutate', guard('sale.mutate'), (req, res) => {
   const tx = findTx(req.params.id);
   if (!tx || tx.state !== 'active') return res.status(404).json({ error: 'Active transaction not found' });
   if (tx.reg_status !== 'done') return res.status(400).json({ error: 'Registration must be completed before mutation' });
@@ -81,24 +117,24 @@ app.post('/api/sale/:id/mutate', (req, res) => {
   tx.mutation_date = new Date().toISOString();
   tx.state = 'completed';
   db.save();
-  ledger.append(plot.id, 'MUTATION_DONE', { tx_id: tx.id, new_owner: tx.buyer });
+  ledger.append(plot.id, 'MUTATION_DONE', { tx_id: tx.id, new_owner: tx.buyer, by_role: req.role });
   res.json({ transaction: tx, plot });
 });
 
 // 4) Cancel: unlock, owner unchanged
-app.post('/api/sale/:id/cancel', (req, res) => {
+app.post('/api/sale/:id/cancel', guard('sale.cancel'), (req, res) => {
   const tx = findTx(req.params.id);
   if (!tx || tx.state !== 'active') return res.status(404).json({ error: 'Active transaction not found' });
   const plot = findPlot(tx.plot_id);
   plot.status = 'Free';
   tx.state = 'cancelled';
   db.save();
-  ledger.append(plot.id, 'SALE_CANCELLED', { tx_id: tx.id });
+  ledger.append(plot.id, 'SALE_CANCELLED', { tx_id: tx.id, by_role: req.role });
   res.json({ transaction: tx, plot });
 });
 
 // ---- Bank mortgage ----
-app.post('/api/mortgage/create', (req, res) => {
+app.post('/api/mortgage/create', guard('mortgage.create'), (req, res) => {
   const { plot_id, owner, bank, loan_ref } = req.body;
   const plot = findPlot(plot_id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
@@ -106,23 +142,23 @@ app.post('/api/mortgage/create', (req, res) => {
 
   const result = checkMortgage(plot, owner, bank);
   if (!result.allowed) {
-    ledger.append(plot.id, 'MORTGAGE_BLOCKED', { owner, bank, loan_ref, reasons: result.reasons.map((x) => x.code) });
+    ledger.append(plot.id, 'MORTGAGE_BLOCKED', { owner, bank, loan_ref, reasons: result.reasons.map((x) => x.code), by_role: req.role });
     return res.status(409).json({ blocked: true, ...result });
   }
   plot.mortgage = { bank, loan_ref };
   db.save();
-  ledger.append(plot.id, 'MORTGAGE_CREATED', { owner, bank, loan_ref });
+  ledger.append(plot.id, 'MORTGAGE_CREATED', { owner, bank, loan_ref, by_role: req.role });
   res.status(201).json({ blocked: false, ...result, mortgage: plot.mortgage });
 });
 
-app.post('/api/mortgage/release', (req, res) => {
+app.post('/api/mortgage/release', guard('mortgage.release'), (req, res) => {
   const plot = findPlot(req.body.plot_id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
   if (!plot.mortgage) return res.status(400).json({ error: 'No mortgage on this plot' });
   const released = plot.mortgage;
   plot.mortgage = null;
   db.save();
-  ledger.append(plot.id, 'MORTGAGE_RELEASED', released);
+  ledger.append(plot.id, 'MORTGAGE_RELEASED', { ...released, by_role: req.role });
   res.json({ released });
 });
 
@@ -136,7 +172,10 @@ app.get('/api/gap', (req, res) => {
 });
 
 // ---- Demo helpers (for the video/demo only) ----
-app.post('/api/dev/reset', (req, res) => { db.reset(); res.json({ ok: true }); });
+// They simulate an attacker editing the database directly, so they deliberately skip the role check.
+// They are switched off when NODE_ENV=production.
+if (process.env.NODE_ENV !== 'production') {
+app.post('/api/dev/reset', (req, res) => { ledger.reset(); res.json({ ok: true }); });
 
 // Simulates someone editing an old database record behind the system's back
 app.post('/api/dev/tamper', (req, res) => {
@@ -162,6 +201,41 @@ app.post('/api/dev/tamper-smart', (req, res) => {
   db.save();
   res.json({ tampered_entry: d.ledger[idx].id, note: 'hashes recomputed, signatures untouched' });
 });
+
+// More attacks for the integrity demo/tests. Each one edits the stored data behind the system's back.
+const ATTACKS = {
+  // change a plot's owner without any ledger event (bypassing registration + mutation)
+  owner_change: (d) => { const p = d.plots.find((x) => x.id === 'P1'); p.current_owner = 'FORGED_OWNER'; return { plot: p.id }; },
+  // replace the newest signature with a signature over different data
+  bad_signature: (d) => { const e = d.ledger[d.ledger.length - 1]; e.signature = keys.sign('forged'); return { entry: e.id }; },
+  // point the newest entry at the wrong previous hash
+  break_link: (d) => { const e = d.ledger[d.ledger.length - 1]; e.prev_hash = 'f'.repeat(64); return { entry: e.id }; },
+  // delete an entry from the middle and renumber the rest
+  delete_middle: (d) => {
+    if (d.ledger.length < 3) return null;
+    const [gone] = d.ledger.splice(1, 1);
+    d.ledger.forEach((e, i) => { e.id = i + 1; });
+    return { deleted_entry: gone.id };
+  },
+  // delete the last entry (e.g. hide the newest sale)
+  truncate_tail: (d) => (d.ledger.length < 2 ? null : { deleted_entry: d.ledger.pop().id }),
+  // swap the last two entries
+  reorder: (d) => {
+    const n = d.ledger.length;
+    if (n < 3) return null;
+    [d.ledger[n - 2], d.ledger[n - 1]] = [d.ledger[n - 1], d.ledger[n - 2]];
+    return { swapped: [d.ledger[n - 2].id, d.ledger[n - 1].id] };
+  },
+};
+app.post('/api/dev/attack', (req, res) => {
+  const attack = ATTACKS[req.body.type];
+  if (!attack) return res.status(400).json({ error: `type must be one of: ${Object.keys(ATTACKS).join(', ')}` });
+  const result = attack(db.get());
+  if (!result) return res.status(400).json({ error: 'Not enough ledger entries yet. Run a sale first.' });
+  db.save();
+  res.json({ attack: req.body.type, ...result });
+});
+}
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`LandLock API running on http://localhost:${PORT}`));

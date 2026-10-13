@@ -1,9 +1,12 @@
 // Sub-Registrar's signing key (Ed25519). Generated once and kept in keys.json.
-// In real use the private key would sit in a hardware module at the registry office.
+// In real use the private key would sit in a hardware module (HSM) or managed key service at the registry office.
+// PROTOTYPE RISK: keys.json holds the PRIVATE key in plain text. It is git-ignored and must never be
+// sent to the frontend, returned by the API or logged. Only sign/verify/publicKey are exported.
+// LANDLOCK_KEY_FILE can point it outside the project folder.
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const FILE = path.join(__dirname, 'keys.json');
+const FILE = process.env.LANDLOCK_KEY_FILE || path.join(__dirname, 'keys.json');
 
 function load() {
   if (fs.existsSync(FILE)) return JSON.parse(fs.readFileSync(FILE, 'utf8'));
@@ -12,7 +15,7 @@ function load() {
     publicKey: publicKey.export({ type: 'spki', format: 'pem' }),
     privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }),
   };
-  fs.writeFileSync(FILE, JSON.stringify(k, null, 2));
+  fs.writeFileSync(FILE, JSON.stringify(k, null, 2), { mode: 0o600 });
   return k;
 }
 
