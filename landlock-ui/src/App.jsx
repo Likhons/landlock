@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 const API = 'http://localhost:4000/api'
 
 const COLORS = {
-  green:  { bg: '#e6f6ec', border: '#2e9d57', text: '#1b6b3a', bn: 'নিরাপদ (Green)', en: 'Safe (Green)' },
+  green:  { bg: '#e6f6ec', border: '#2e9d57', text: '#1b6b3a', bn: 'কোনো সতর্কতা পাওয়া যায়নি (Green)', en: 'No warnings found (Green)' },
   yellow: { bg: '#fff6dd', border: '#d9a400', text: '#7a5c00', bn: 'সতর্কতা (Yellow)', en: 'Caution (Yellow)' },
   red:    { bg: '#fdeaea', border: '#d93a3a', text: '#8f1f1f', bn: 'ঝুঁকিপূর্ণ (Red)', en: 'High risk (Red)' },
 }
@@ -385,6 +385,9 @@ export default function App() {
             {data.risk.reasons.map((r) => (
               <div key={r.code} style={{ marginTop: 8, fontSize: 17 }}>{r[lang]}</div>
             ))}
+            {data.risk.notice && (
+              <div style={{ marginTop: 10, fontSize: 12, color: '#555' }}>ℹ️ {data.risk.notice[lang]}</div>
+            )}
           </div>
 
           <SurveyTimeline plot={data.plot} lang={lang} />
@@ -472,7 +475,23 @@ export default function App() {
             )}
             {result && result.body.blocked === false && (
               <div style={{ background: '#e6f6ec', border: '2px solid #2e9d57', color: '#1b6b3a', borderRadius: 8, padding: 12, marginTop: 12 }}>
-                ✅ {tr('যাচাই সফল। জমিটি এখন Pending (লক) অবস্থায় আছে।', 'Checks passed. The plot is now Pending (locked).')}
+                <b>✅ {tr('বিক্রয় গৃহীত হয়েছে। জমিটি এখন Pending (লক) অবস্থায় আছে।', 'Sale accepted. The plot is now Pending (locked).')}</b>
+                {result.body.checks && (
+                  <>
+                    <div style={{ marginTop: 8 }}>{tr('যে যাচাইগুলো সফল হয়েছে:', 'Checks that passed:')}</div>
+                    {result.body.checks.map((ch) => (
+                      <div key={ch.code} style={{ marginTop: 2 }}>✔ {ch[lang]}</div>
+                    ))}
+                  </>
+                )}
+                {result.body.not_checked && (
+                  <div style={{ marginTop: 8, color: '#555', fontSize: 13 }}>
+                    {tr('এই প্রোটোটাইপ যা যাচাই করে না:', 'Not checked by this prototype:')}
+                    {result.body.not_checked.map((n) => (
+                      <div key={n.code}>– {n[lang]}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {result && result.body.error && result.src !== 'tx' && <ErrorBox body={result.body} lang={lang} />}

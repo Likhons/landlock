@@ -77,8 +77,36 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
     });
   }
 
+  // Every check that was actually run above, with passed = "its blocking reason was not raised".
+  // Optional checks (buyer, deed no.) are listed only when they ran.
+  const failed = (code) => reasons.some((r) => r.code === code);
+  const checks = [
+    { code: 'NO_PENDING_SALE', passed: !failed('PLOT_LOCKED'), bn: 'এই জমিতে অন্য কোনো বিক্রয় চলছে না (লক নেই)', en: 'No other sale is in progress on this plot (not locked)' },
+    { code: 'NOT_DISPUTED', passed: !failed('PLOT_DISPUTED'), bn: 'জমিটি বিরোধপূর্ণ নয়', en: 'The plot is not disputed' },
+    { code: 'NO_MORTGAGE', passed: !failed('PLOT_MORTGAGED'), bn: 'জমিতে কোনো চলমান বন্ধক নেই', en: 'No active mortgage on this plot' },
+    {
+      code: 'OWNER_MATCH', passed: !failed('NOT_OWNER'),
+      bn: `বিক্রেতা (${seller}) রেকর্ডের বর্তমান মালিকের (${plot.current_owner}) সাথে মিলেছে`,
+      en: `Seller (${seller}) matches the recorded current owner (${plot.current_owner})`,
+    },
+    {
+      code: 'AREA_NOT_EXCEEDED', passed: !failed('AREA_EXCEEDS'),
+      bn: `দলিলের পরিমাণ (${deedArea} শতক) খতিয়ানের পরিমাণের (${plot.area} শতক) চেয়ে বেশি নয়`,
+      en: `Deed area (${deedArea}) is not larger than the recorded area (${plot.area})`,
+    },
+  ];
+  if (buyer !== undefined) {
+    checks.push({ code: 'DIFFERENT_PARTIES', passed: !failed('SAME_PARTY'), bn: 'ক্রেতা ও বিক্রেতা ভিন্ন ব্যক্তি', en: 'Buyer and seller are different people' });
+  }
+  if (deedNo !== undefined) {
+    checks.push({
+      code: 'UNIQUE_DEED', passed: !failed('DUPLICATE_DEED'),
+      bn: `দলিল নং ${deedNo} আগে কোনো লেনদেনে ব্যবহার হয়নি`, en: `Deed no. ${deedNo} has not been used by another transaction`,
+    });
+  }
+
   const level = reasons.some((r) => r.level === RED) ? RED : GREEN;
-  return { level, reasons, allowed: level !== RED };
+  return { level, reasons, allowed: level !== RED, checks };
 }
 
 // Checks run when a bank tries to register a MORTGAGE on a plot.
@@ -177,17 +205,38 @@ function assessPlot(plot, activeTx, ledgerStatus, disputedTx) {
 
   reasons.push(...checkSurveyChain(plot));
 
+  // Green only means none of the configured checks raised a warning. It is not a safety guarantee.
   if (reasons.length === 0) {
     reasons.push({
       level: GREEN, code: 'CLEAR',
-      bn: 'কোনো সমস্যা পাওয়া যায়নি। রেকর্ড অনুযায়ী জমিটি মুক্ত।',
-      en: 'No issues found. The plot is free in the records.',
+      bn: 'কোনো সতর্কতা পাওয়া যায়নি। এই প্রোটোটাইপের নির্ধারিত যাচাইগুলোতে কোনো সমস্যা ধরা পড়েনি।',
+      en: 'No warnings found. None of this prototype\'s configured checks found a problem.',
     });
   }
 
   const level = reasons.some((r) => r.level === RED) ? RED
     : reasons.some((r) => r.level === YELLOW) ? YELLOW : GREEN;
-  return { level, reasons };
+  return { level, reasons, notice: RESULT_NOTICE };
 }
 
-module.exports = { checkSale, checkMortgage, assessPlot, partialSale };
+// Shown with every risk result and accepted sale
+const RESULT_NOTICE = {
+  bn: 'এই প্রোটোটাইপ শুধু নমুনা রেকর্ডের ভিত্তিতে নির্দিষ্ট কিছু নিয়ম যাচাই করে। এটি আইনগত মালিকানার নিশ্চয়তা দেয় না এবং জমিটি প্রতারণামুক্ত তা প্রমাণ করে না।',
+  en: 'This prototype only checks a fixed set of rules against sample records. It does not guarantee legal ownership or prove that a plot is fraud-free.',
+};
+
+// Things a sale acceptance does NOT check, listed so nobody reads "accepted" as "verified"
+const NOT_CHECKED = [
+  {
+    code: 'SELLER_IDENTITY',
+    bn: 'বিক্রেতার পরিচয় (যেমন NID) যাচাই করা হয় না; শুধু নাম রেকর্ডের সাথে মেলানো হয়।',
+    en: 'Seller identity (e.g. NID) is not verified; only the name is compared with the record.',
+  },
+  {
+    code: 'LEGAL_TITLE',
+    bn: 'আইনগত মালিকানা যাচাই করা হয় না; শুধু LandLock-এর নমুনা রেকর্ড দেখা হয়।',
+    en: 'Legal title is not verified; only LandLock\'s own sample records are checked.',
+  },
+];
+
+module.exports = { checkSale, checkMortgage, assessPlot, partialSale, RESULT_NOTICE, NOT_CHECKED };

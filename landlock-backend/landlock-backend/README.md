@@ -21,6 +21,7 @@ UI: in `../../landlock-ui` run `npm install` then `npm run dev` (http://localhos
 - Survey chain: unexplained owner changes / area increases between CS, SA, RS, BS are flagged Yellow.
 - Registration vs mutation gap: registered-but-not-mutated deeds are flagged Yellow and listed at /api/gap.
 - Registered deed lock: once a deed is registered the sale **cannot be cancelled**. Only the AC Land Officer can complete the mutation (owner changes, plot unlocks) or **reject** it with a reason. A rejected mutation makes the transaction `disputed` and the plot `Disputed` (Red, still locked, owner unchanged): no sale or mortgage until the dispute is resolved outside the prototype.
+- Explainable result: Green means **"No warnings found"** (none of the configured checks found a problem). It does **not** guarantee legal ownership or prove a plot is fraud-free; every result carries this notice. An accepted sale returns `checks` (each check that actually ran and passed) and `not_checked` (seller identity, legal title).
 - Hash chain + digital signature: every event is SHA-256 linked to the previous one and signed (Ed25519).
 - Role-based access control (prototype) and strengthened ledger verification (see below).
 

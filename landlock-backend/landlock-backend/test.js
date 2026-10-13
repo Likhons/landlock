@@ -295,6 +295,39 @@ async function disputeTests() {
   await post('/dev/reset');
 }
 
+async function wordingTests() {
+  section('Honest Green wording and explained acceptance');
+  await post('/dev/reset');
+  const p1 = await get('/plots/P1');
+  const clear = p1.risk.reasons.find((x) => x.code === 'CLEAR');
+  ok('W1. Green reads "No warnings found" / "কোনো সতর্কতা পাওয়া যায়নি"', p1.risk.level === 'green' && clear
+    && clear.en.startsWith('No warnings found') && clear.bn.startsWith('কোনো সতর্কতা পাওয়া যায়নি'));
+  ok('W2. No "safe" / "free in the records" claims in the Green result', !/safe|free in the records|নিরাপদ|মুক্ত/i.test(clear.en + clear.bn));
+  const p2 = await get('/plots/P2');
+  ok('W3. Every risk result carries the no-guarantee notice (Green and Yellow)', [p1, p2].every((p) => p.risk.notice
+    && /does not guarantee legal ownership/.test(p.risk.notice.en) && /fraud-free/.test(p.risk.notice.en) && p.risk.notice.bn));
+
+  let r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-W1', deed_area: 10 }, SR);
+  const codes = (r.body.checks || []).map((c) => c.code);
+  const expected = ['LEDGER_VERIFIED', 'NO_PENDING_SALE', 'NOT_DISPUTED', 'NO_MORTGAGE', 'OWNER_MATCH', 'FULL_PLOT_AREA', 'DIFFERENT_PARTIES', 'UNIQUE_DEED'];
+  ok('W4. Accepted sale lists exactly the checks that ran (no extra claims)', r.status === 201
+    && codes.length === expected.length && expected.every((c) => codes.includes(c)));
+  ok('W5. Every listed check passed and is bilingual', r.body.checks.every((c) => c.passed === true && c.bn && c.en));
+  const owner = r.body.checks.find((c) => c.code === 'OWNER_MATCH');
+  const area = r.body.checks.find((c) => c.code === 'FULL_PLOT_AREA');
+  ok('W6. Check texts name the real values (seller, owner, areas)', /Rahim/.test(owner.en) && /Rahim/.test(owner.bn) && /\(10\).*\(10\)/.test(area.en));
+  const nc = (r.body.not_checked || []).map((c) => c.code);
+  ok('W7. Acceptance says what is NOT checked (identity, legal title) + notice', nc.includes('SELLER_IDENTITY') && nc.includes('LEGAL_TITLE')
+    && /does not guarantee/.test(r.body.notice.en));
+
+  r = await post('/sale/initiate', { plot_id: 'P2', seller: 'Wrong Person', buyer: 'Jamal', deed_no: 'D-W2', deed_area: 8 }, SR);
+  const failedChecks = r.body.checks.filter((c) => !c.passed).map((c) => c.code);
+  ok('W8. Blocked sale: failed checks match the blocking reasons (only OWNER_MATCH)', r.status === 409
+    && failedChecks.length === 1 && failedChecks[0] === 'OWNER_MATCH' && r.body.reasons.length === 1 && r.body.reasons[0].code === 'NOT_OWNER');
+  ok('W9. Ledger still valid', (await get('/ledger/verify')).valid === true);
+  await post('/dev/reset');
+}
+
 // Appends a correctly hashed AND signed entry plus a matching signed checkpoint, the way someone
 // holding the private key could. Used to prove that ledger replay itself enforces the workflow rules.
 function forgeSignedEvent(plot_id, event_type, data) {
@@ -480,6 +513,7 @@ async function restartTests() {
     await validationTests();
     await disputeTests();
     await fullPlotTests();
+    await wordingTests();
     await integrityTests();
     await restartTests();
   } catch (e) {

@@ -4,7 +4,7 @@ const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, assessPlot, partialSale } = require('./rules');
+const { checkSale, checkMortgage, assessPlot, partialSale, RESULT_NOTICE, NOT_CHECKED } = require('./rules');
 
 const app = express();
 app.use(cors());
@@ -95,6 +95,24 @@ function invalid(res, fields) {
   });
 }
 
+// The full list of checks behind an accepted sale. Besides checkSale's own checks it adds the two
+// that ran elsewhere in this request: ledger verification (in guard) and "not smaller" (partialSale).
+// "Not larger" + "not smaller" are shown together as one full-plot check.
+function acceptedChecks(checks, plot, deedArea) {
+  return [
+    {
+      code: 'LEDGER_VERIFIED', passed: true,
+      bn: 'বিক্রয়ের আগে লেনদেনের ইতিহাস যাচাই হয়েছে (hash chain, ডিজিটাল স্বাক্ষর, checkpoint, রেকর্ড Ledger-এর সাথে মিলেছে)',
+      en: 'Transaction history verified before this sale (hash chain, signatures, checkpoint, records match the ledger)',
+    },
+    ...checks.map((c) => (c.code !== 'AREA_NOT_EXCEEDED' ? c : {
+      code: 'FULL_PLOT_AREA', passed: true,
+      bn: `দলিলের পরিমাণ (${deedArea} শতক) খতিয়ানের পুরো পরিমাণের (${plot.area} শতক) সমান`,
+      en: `Deed area (${deedArea}) equals the full recorded plot area (${plot.area})`,
+    })),
+  ];
+}
+
 // ---- Read ----
 app.get('/api/plots', (req, res) => res.json(db.get().plots));
 
@@ -148,7 +166,7 @@ app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
   plot.status = 'Pending';
   db.save();
   ledger.append(plot.id, 'SALE_INITIATED', { tx_id: tx.id, seller, buyer, deed_no, deed_area: tx.deed_area, by_role: req.role });
-  res.status(201).json({ blocked: false, ...result, transaction: tx });
+  res.status(201).json({ blocked: false, ...result, checks: acceptedChecks(result.checks, plot, deed_area), not_checked: NOT_CHECKED, notice: RESULT_NOTICE, transaction: tx });
 });
 
 // 2) Registration done (deed registered, khatian not yet updated)
