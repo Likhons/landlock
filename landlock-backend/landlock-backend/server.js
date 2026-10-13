@@ -1,5 +1,12 @@
+// Optional local settings: backend/.env (see .env.example). Variables already set in the shell win.
+const fs = require('fs');
+const path = require('path');
+const ENV_FILE = path.join(__dirname, '.env');
+if (fs.existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+
 const express = require('express');
 const cors = require('cors');
+const config = require('./config');
 const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
@@ -19,6 +26,10 @@ const disputedTxFor = (plot_id) =>
 
 // Finds the active transaction for a workflow step, or sends a clear error and returns null.
 function activeTxOrError(req, res) {
+  if (!/^[1-9]\d{0,8}$/.test(req.params.id)) {
+    invalid(res, ['id']);
+    return null;
+  }
   const tx = findTx(req.params.id);
   if (tx && tx.state === 'disputed') {
     res.status(409).json({
@@ -62,20 +73,41 @@ const guard = (perm) => (req, res, next) => {
     });
   }
   req.role = role;
+  // From here the request may change data. If it fails midway, the error handler restores this copy.
+  res.locals.rollback = db.snapshot();
   next();
 };
 
 // ---- Input validation (server side; never trust the form) ----
-// Names / numbers must be non-empty text after trimming spaces.
+// Every value is trimmed and must match its expected format; anything else is rejected with 400
+// before any rule runs, so malformed values never reach data.json or the signed ledger.
 const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-// Area must be a positive finite number (a numeric string like "10" is fine).
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+// Person / bank names: letters in any script (Bangla too), digits, spaces and . ' - & ( ) , ; max 100
+const NAME_RE = /^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .'&(),-]*$/u;
+// Deed / loan numbers: e.g. D-1001, 4521/1998, LN-2024-77; max 40
+const REF_RE = /^[A-Za-z0-9][A-Za-z0-9/._ -]*$/;
+const PLOT_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
+// Area as text: plain decimal digits only ("10", "10.5"). Rejects "0x10", "1e3", "Infinity", "-5".
+const AREA_TEXT_RE = /^\d+(\.\d+)?$/;
+const name = (v) => { const t = text(v); return t && t.length <= 100 && NAME_RE.test(t) ? t : null; };
+const ref = (v) => { const t = text(v); return t && t.length <= 40 && REF_RE.test(t) ? t : null; };
+const note = (v) => { const t = text(v); return t && t.length <= 300 && !CONTROL_CHARS.test(t) ? t : null; };
+const plotId = (v) => (typeof v === 'string' && PLOT_ID_RE.test(v) ? v : null);
+// Area: a finite number greater than 0 (JSON number, or plain decimal text like "10").
 const area = (v) => {
-  if (typeof v !== 'number' && typeof v !== 'string') return null;
-  if (typeof v === 'string' && !v.trim()) return null;
-  const n = Number(v);
+  let n;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && AREA_TEXT_RE.test(v.trim())) n = Number(v.trim());
+  else return null;
   return Number.isFinite(n) && n > 0 ? n : null;
 };
+// Returns the names of fields whose value failed validation (null).
+const badFields = (values) => Object.entries(values).filter(([, v]) => v === null).map(([k]) => k);
+
 const FIELD_LABEL = {
+  plot_id: { bn: 'জমির আইডি', en: 'plot id' },
+  id: { bn: 'লেনদেন নং', en: 'transaction id' },
   seller: { bn: 'বিক্রেতা', en: 'seller' },
   buyer: { bn: 'ক্রেতা', en: 'buyer' },
   deed_no: { bn: 'দলিল নং', en: 'deed no.' },
@@ -85,6 +117,10 @@ const FIELD_LABEL = {
   bank: { bn: 'ব্যাংক', en: 'bank' },
   loan_ref: { bn: 'ঋণ নং', en: 'loan no.' },
 };
+function plotNotFound(res) {
+  return res.status(404).json({ error: 'Plot not found', code: 'PLOT_NOT_FOUND', bn: 'জমিটি পাওয়া যায়নি।', en: 'Plot not found.' });
+}
+
 // Rejects bad input with 400 before any rule runs. Bad input is not written to the ledger.
 function invalid(res, fields) {
   return res.status(400).json({
@@ -114,11 +150,18 @@ function acceptedChecks(checks, plot, deedArea) {
 }
 
 // ---- Read ----
-app.get('/api/plots', (req, res) => res.json(db.get().plots));
+// Optional lookup by the official identifiers: /api/plots?mouza=Rampura&khatian_no=101&dag_no=124
+// (any combination; case and extra spaces ignored). Without filters it returns all plots, as before.
+const LOOKUP_FIELDS = ['mouza', 'khatian_no', 'dag_no'];
+const norm = (v) => String(v).trim().toLowerCase();
+app.get('/api/plots', (req, res) => {
+  const filters = LOOKUP_FIELDS.filter((f) => typeof req.query[f] === 'string' && req.query[f].trim());
+  res.json(db.get().plots.filter((p) => filters.every((f) => norm(p[f]) === norm(req.query[f]))));
+});
 
 app.get('/api/plots/:id', (req, res) => {
   const plot = findPlot(req.params.id);
-  if (!plot) return res.status(404).json({ error: 'Plot not found' });
+  if (!plot) return plotNotFound(res);
   const disputed = disputedTxFor(plot.id);
   const risk = assessPlot(plot, activeTxFor(plot.id), ledger.verify(), disputed);
   res.json({
@@ -133,18 +176,21 @@ app.get('/api/ledger', (req, res) => res.json(db.get().ledger));
 app.get('/api/ledger/verify', (req, res) => res.json(ledger.verify()));
 app.get('/api/ledger/public-key', (req, res) => res.json({ signer: keys.SIGNER, publicKey: keys.publicKey }));
 app.get('/api/roles', (req, res) => res.json(rbac.describe()));
+// Lets the UI show or hide the demo tools. Nothing secret is returned.
+app.get('/api/config', (req, res) => res.json({ demo_mode: config.demoMode }));
 
 // ---- Sale workflow ----
 // 1) Initiate: run checks; if OK, lock the plot (Pending)
 app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
-  const plot = findPlot(req.body.plot_id);
-  if (!plot) return res.status(404).json({ error: 'Plot not found' });
-  const seller = text(req.body.seller);
-  const buyer = text(req.body.buyer);
-  const deed_no = text(req.body.deed_no);
+  const plot_id = plotId(req.body.plot_id);
+  const seller = name(req.body.seller);
+  const buyer = name(req.body.buyer);
+  const deed_no = ref(req.body.deed_no);
   const deed_area = area(req.body.deed_area);
-  const bad = Object.entries({ seller, buyer, deed_no, deed_area }).filter(([, v]) => v === null).map(([k]) => k);
+  const bad = badFields({ plot_id, seller, buyer, deed_no, deed_area });
   if (bad.length) return invalid(res, bad);
+  const plot = findPlot(plot_id);
+  if (!plot) return plotNotFound(res);
   // Full-plot sales only (prototype). Unsupported request -> 400, nothing written to the ledger.
   const partial = partialSale(plot, deed_area);
   if (partial) return res.status(400).json({ error: partial.en, ...partial, plot_area: plot.area, deed_area });
@@ -205,7 +251,7 @@ app.post('/api/sale/:id/reject-mutation', guard('sale.reject_mutation'), (req, r
   const tx = activeTxOrError(req, res);
   if (!tx) return;
   if (tx.reg_status !== 'done') return res.status(400).json({ error: 'Only a registered deed can have its mutation rejected. Cancel the sale instead.' });
-  const reason = text(req.body.reason);
+  const reason = note(req.body.reason);
   if (!reason) return invalid(res, ['reason']);
   const plot = findPlot(tx.plot_id);
   plot.status = 'Disputed';
@@ -241,13 +287,14 @@ app.post('/api/sale/:id/cancel', guard('sale.cancel'), (req, res) => {
 
 // ---- Bank mortgage ----
 app.post('/api/mortgage/create', guard('mortgage.create'), (req, res) => {
-  const plot = findPlot(req.body.plot_id);
-  if (!plot) return res.status(404).json({ error: 'Plot not found' });
-  const owner = text(req.body.owner);
-  const bank = text(req.body.bank);
-  const loan_ref = text(req.body.loan_ref);
-  const bad = Object.entries({ owner, bank, loan_ref }).filter(([, v]) => v === null).map(([k]) => k);
+  const plot_id = plotId(req.body.plot_id);
+  const owner = name(req.body.owner);
+  const bank = name(req.body.bank);
+  const loan_ref = ref(req.body.loan_ref);
+  const bad = badFields({ plot_id, owner, bank, loan_ref });
   if (bad.length) return invalid(res, bad);
+  const plot = findPlot(plot_id);
+  if (!plot) return plotNotFound(res);
 
   const result = checkMortgage(plot, owner, bank);
   if (!result.allowed) {
@@ -260,10 +307,22 @@ app.post('/api/mortgage/create', guard('mortgage.create'), (req, res) => {
   res.status(201).json({ blocked: false, ...result, mortgage: plot.mortgage });
 });
 
+// Release needs the loan number being released, so the wrong mortgage cannot be cleared by mistake.
 app.post('/api/mortgage/release', guard('mortgage.release'), (req, res) => {
-  const plot = findPlot(req.body.plot_id);
-  if (!plot) return res.status(404).json({ error: 'Plot not found' });
+  const plot_id = plotId(req.body.plot_id);
+  const loan_ref = ref(req.body.loan_ref);
+  const bad = badFields({ plot_id, loan_ref });
+  if (bad.length) return invalid(res, bad);
+  const plot = findPlot(plot_id);
+  if (!plot) return plotNotFound(res);
   if (!plot.mortgage) return res.status(400).json({ error: 'No mortgage on this plot' });
+  if (norm(loan_ref) !== norm(plot.mortgage.loan_ref)) {
+    return res.status(409).json({
+      error: 'Loan number does not match the mortgage on this plot', code: 'LOAN_MISMATCH',
+      bn: `ঋণ নং (${loan_ref}) এই জমির বন্ধকের সাথে মিলছে না। বন্ধক মুক্ত করা হয়নি।`,
+      en: `Loan no. (${loan_ref}) does not match the mortgage on this plot. The mortgage was not released.`,
+    });
+  }
   const released = plot.mortgage;
   plot.mortgage = null;
   db.save();
@@ -280,10 +339,11 @@ app.get('/api/gap', (req, res) => {
   res.json(rows);
 });
 
-// ---- Demo helpers (for the video/demo only) ----
-// They simulate an attacker editing the database directly, so they deliberately skip the role check.
-// They are switched off when NODE_ENV=production.
-if (process.env.NODE_ENV !== 'production') {
+// ---- Demo helpers (local hackathon demo only) ----
+// They reset data and simulate an attacker editing the database directly, so they deliberately skip
+// the role check. They exist ONLY when demo mode is explicitly enabled (LANDLOCK_DEMO_MODE=true or
+// --demo) and never when NODE_ENV=production; otherwise every /api/dev/* request gets 404.
+if (config.demoMode) {
 app.post('/api/dev/reset', (req, res) => { ledger.reset(); res.json({ ok: true }); });
 
 // Simulates someone editing an old database record behind the system's back
@@ -344,6 +404,11 @@ app.post('/api/dev/attack', (req, res) => {
   db.save();
   res.json({ attack: req.body.type, ...result });
 });
+} else {
+  app.use('/api/dev', (req, res) => res.status(404).json({
+    error: 'Demo endpoints are disabled', code: 'DEMO_DISABLED',
+    bn: 'ডেমো টুল বন্ধ আছে।', en: 'Demo tools are disabled on this server.',
+  }));
 }
 
 // ---- Errors: always JSON, never a stack trace ----
@@ -356,9 +421,24 @@ app.use((err, req, res, next) => {
       bn: 'অনুরোধের তথ্য সঠিক JSON নয়।', en: 'Request body is not valid JSON.',
     });
   }
-  console.error(err.message);
-  res.status(err.status || 500).json({ error: 'Internal server error', code: 'SERVER_ERROR' });
+  // Undo a write request that failed midway, so no half-finished change stays in memory or on disk.
+  if (res.locals.rollback) db.restore(res.locals.rollback);
+  // Log only the error kind: messages can contain file paths.
+  console.error(`Request failed: ${req.method} ${req.path} (${err.code || err.name})`);
+  res.status(500).json({
+    error: 'Internal server error. The change was not saved.', code: 'SERVER_ERROR',
+    bn: 'সার্ভারে সমস্যা হয়েছে। পরিবর্তনটি সংরক্ষণ করা হয়নি।', en: 'Server error. The change was not saved.',
+  });
 });
 
+// Ctrl+C / stop: exit normally so the data-folder lock is released
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`LandLock API running on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`LandLock API running on http://localhost:${PORT}`);
+  if (config.demoMode) console.log('Demo mode ON: /api/dev/* reset and attack endpoints are enabled (local demo only).');
+  else if (config.demoRequested) console.warn('Demo mode was requested but NODE_ENV=production: demo endpoints stay disabled.');
+  else console.log('Demo mode OFF: /api/dev/* endpoints are disabled. Use "npm run demo" for the local demo.');
+});

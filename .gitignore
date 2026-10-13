@@ -25,6 +25,9 @@ id_ed25519*
 landlock-backend/landlock-backend/data.json
 # Signed ledger checkpoint written by ledger.js (runtime state, tied to the local key)
 landlock-backend/landlock-backend/trusted/
+# Lock file of a running server, and temp files of interrupted atomic writes
+*.json.lock
+*.tmp
 
 # ---- Dependencies -----------------------------------------------------------
 node_modules/

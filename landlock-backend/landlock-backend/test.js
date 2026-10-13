@@ -9,10 +9,16 @@ const path = require('path');
 const PORT = process.env.TEST_PORT || 4100;
 const base = `http://localhost:${PORT}/api`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'landlock-test-'));
+// Every setting is explicit, so a local backend/.env cannot change what the tests see.
+// Demo mode is switched on deliberately: the tests use /api/dev/reset and the attack endpoints.
 const ENV = {
   LANDLOCK_DATA_DIR: path.join(TMP, 'data'),
   LANDLOCK_TRUST_DIR: path.join(TMP, 'trusted'),
   LANDLOCK_KEY_FILE: path.join(TMP, 'keys.json'),
+  LANDLOCK_DEMO_MODE: 'true',
+  NODE_ENV: 'development',
+  LANDLOCK_REQUIRE_KEY: 'false',
+  LANDLOCK_EXTRA_GRANTS: '',
 };
 fs.mkdirSync(ENV.LANDLOCK_DATA_DIR);
 const DATA_FILE = path.join(ENV.LANDLOCK_DATA_DIR, 'data.json');
@@ -32,10 +38,13 @@ const info = (msg) => console.log('INFO ' + msg);
 const section = (t) => console.log(`\n---- ${t} ----`);
 
 let server;
-async function start(extraEnv = {}) {
-  server = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT, ...ENV, ...extraEnv }, stdio: 'ignore',
+let serverLog = ''; // everything the test servers print, checked for leaked secrets/paths
+async function start(extraEnv = {}, args = []) {
+  server = spawn(process.execPath, [path.join(__dirname, 'server.js'), ...args], {
+    env: { ...process.env, PORT, ...ENV, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'],
   });
+  server.stdout.on('data', (c) => { serverLog += c; });
+  server.stderr.on('data', (c) => { serverLog += c; });
   for (let i = 0; i < 50; i++) {
     try { await get('/roles'); return; } catch (e) { await new Promise((r) => setTimeout(r, 200)); }
   }
@@ -111,7 +120,7 @@ async function storyTests() {
   ok('18. Mortgage blocked while a sale is in progress', r.status === 409 && r.body.reasons.some((x) => x.code === 'SALE_IN_PROGRESS'));
   r = await post('/mortgage/create', { plot_id: 'P5', owner: 'Someone Else', bank: 'Sonali Bank', loan_ref: 'LN-4' }, SR);
   ok('19. Mortgage by a non-owner blocked', r.status === 409 && r.body.reasons.some((x) => x.code === 'NOT_OWNER'));
-  await post('/mortgage/release', { plot_id: 'P2' }, SR);
+  await post('/mortgage/release', { plot_id: 'P2', loan_ref: 'LN-1' }, SR);
   r = await post('/sale/initiate', { plot_id: 'P2', seller: 'Karim', buyer: 'Salam', deed_no: 'D-11', deed_area: 8 }, SR);
   ok('20. After release the plot can be sold', r.status === 201);
   ok('21. Ledger still valid after all events', (await get('/ledger/verify')).valid === true);
@@ -394,6 +403,151 @@ async function fullPlotTests() {
   await post('/dev/reset');
 }
 
+// Starts the server expecting it to refuse; returns its exit code and error output.
+function startExpectFail(extraEnv = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], { env: { ...process.env, PORT, ...ENV, ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (c) => { stderr += c; serverLog += c; });
+    const timer = setTimeout(() => { child.kill(); resolve({ code: 'still running', stderr }); }, 10000);
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ code, stderr }); });
+  });
+}
+
+async function mortgageLookupConcurrencyTests() {
+  section('Mortgage release match, plot lookup, concurrent requests');
+  await post('/dev/reset');
+  const ledgerLen = async () => (await get('/ledger')).length;
+
+  // ---- Mortgage release must name the right loan (P4: Janata Bank, LN-2024-77) ----
+  let r = await post('/mortgage/release', { plot_id: 'P4' }, SR);
+  ok('M1. Release without a loan number rejected (400)', r.status === 400 && r.body.code === 'VALIDATION_ERROR' && r.body.fields.includes('loan_ref'));
+  const before = await ledgerLen();
+  r = await post('/mortgage/release', { plot_id: 'P4', loan_ref: 'LN-WRONG' }, SR);
+  ok('M2. Wrong loan number rejected (409 LOAN_MISMATCH, bilingual)', r.status === 409 && r.body.code === 'LOAN_MISMATCH' && r.body.bn && r.body.en);
+  ok('M3. Mortgage still in place, nothing written', (await get('/plots/P4')).plot.mortgage.loan_ref === 'LN-2024-77' && (await ledgerLen()) === before);
+  r = await post('/mortgage/release', { plot_id: 'P4', loan_ref: ' ln-2024-77 ' }, SR);
+  ok('M4. Matching loan number (any case/spaces) releases it', r.status === 200 && (await get('/plots/P4')).plot.mortgage === null);
+  const ev = (await get('/ledger')).find((e) => e.event_type === 'MORTGAGE_RELEASED');
+  ok('M5. Ledger records which loan was released; ledger valid', ev && ev.data.loan_ref === 'LN-2024-77' && (await get('/ledger/verify')).valid === true);
+
+  await post('/dev/reset');
+  await stop();
+  forgeSignedEvent('P4', 'MORTGAGE_RELEASED', { bank: 'Janata Bank', loan_ref: 'SOME-OTHER-LOAN', by_role: SR });
+  await start();
+  let v = await get('/ledger/verify');
+  ok('M6. Signed release of the wrong loan is rejected by ledger replay', !v.valid && v.kind === 'workflow' && /released loan/.test(v.reason));
+  await post('/dev/reset');
+
+  // ---- Plot lookup by mouza / khatian / dag ----
+  const ids = (list) => list.map((p) => p.id).sort().join(',');
+  ok('L1. Lookup by mouza + khatian + dag finds exactly one plot', ids(await get('/plots?mouza=Rampura&khatian_no=101&dag_no=124')) === 'P2');
+  ok('L2. Lookup ignores case and extra spaces', ids(await get('/plots?mouza=%20rampura%20&dag_no=123')) === 'P1');
+  ok('L3. Partial lookup (mouza only) returns all matches', ids(await get('/plots?mouza=Rampura')) === 'P1,P2');
+  ok('L4. No match returns an empty list', (await get('/plots?mouza=Rampura&dag_no=999')).length === 0);
+  ok('L5. No filters returns all plots (unchanged)', (await get('/plots')).length === 5);
+
+  await stop();
+  const original = fs.readFileSync(DATA_FILE);
+  const d = readData();
+  d.plots.find((p) => p.id === 'P2').dag_no = ' 123 '; // same mouza/khatian/dag as P1
+  writeData(d);
+  const fail = await startExpectFail();
+  ok('L6. Duplicate mouza/khatian/dag in data.json: server refuses to start with a clear error',
+    fail.code !== 0 && fail.code !== 'still running' && /duplicate plot identifiers/i.test(fail.stderr) && /P1 and P2/.test(fail.stderr));
+  fs.writeFileSync(DATA_FILE, original);
+  await start();
+
+  // ---- Concurrent requests cannot bypass the lock ----
+  await post('/dev/reset');
+  const burst = (n, fn) => Promise.all(Array.from({ length: n }, (_, i) => fn(i)));
+  const count = (rs, status) => rs.filter((x) => x.status === status).length;
+
+  let rs = await burst(20, (i) => post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: `Buyer${i}`, deed_no: `D-C${i}`, deed_area: 10 }, SR));
+  ok('C1. 20 simultaneous sales on one plot: exactly 1 accepted, 19 blocked (PLOT_LOCKED)', count(rs, 201) === 1 && count(rs, 409) === 19
+    && rs.filter((x) => x.status === 409).every((x) => x.body.reasons.some((y) => y.code === 'PLOT_LOCKED')) && (await get('/transactions')).length === 1);
+  const winner = rs.find((x) => x.status === 201).body.transaction;
+
+  rs = await burst(10, () => post(`/sale/${winner.id}/register`, {}, SR));
+  ok('C2. 10 simultaneous registrations: exactly 1 succeeds', count(rs, 200) === 1 && count(rs, 400) === 9);
+
+  rs = await burst(10, (i) => (i % 2 ? post(`/sale/${winner.id}/cancel`, {}, SR) : post(`/sale/${winner.id}/mutate`, {}, AC)));
+  const mutated = rs.filter((x, i) => i % 2 === 0 && x.status === 200).length;
+  const cancelled = rs.filter((x, i) => i % 2 === 1 && x.status === 200).length;
+  const p1 = await get('/plots/P1');
+  ok('C3. Simultaneous mutate + cancel: exactly 1 mutation, 0 cancels, owner = that buyer',
+    mutated === 1 && cancelled === 0 && p1.plot.current_owner === winner.buyer && p1.plot.status === 'Free'
+    && p1.history.filter((h) => h.event_type === 'MUTATION_DONE').length === 1);
+
+  rs = await burst(10, (i) => post('/mortgage/create', { plot_id: 'P2', owner: 'Karim', bank: `Bank${i}`, loan_ref: `LN-C${i}` }, SR));
+  ok('C4. 10 simultaneous mortgages: exactly 1 registered, 9 DOUBLE_MORTGAGE', count(rs, 201) === 1 && count(rs, 409) === 9
+    && rs.filter((x) => x.status === 409).every((x) => x.body.reasons.some((y) => y.code === 'DOUBLE_MORTGAGE')));
+
+  rs = await Promise.all([
+    post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Hasan', deed_no: 'D-C99', deed_area: 20 }, SR),
+    post('/mortgage/create', { plot_id: 'P5', owner: 'Nasrin', bank: 'Sonali Bank', loan_ref: 'LN-C99' }, SR),
+  ]);
+  const p5 = (await get('/plots/P5')).plot;
+  ok('C5. Simultaneous sale + mortgage: only one wins (never locked AND mortgaged)', count(rs, 201) === 1
+    && !(p5.status === 'Pending' && p5.mortgage));
+  ok('C6. Ledger valid after all bursts', (await get('/ledger/verify')).valid === true);
+  await post('/dev/reset');
+}
+
+async function strictValidationTests() {
+  section('Strict input formats; rejected requests change nothing');
+  await post('/dev/reset');
+  const sale = { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-S1', deed_area: 10 };
+  const bad = (r, field) => r.status === 400 && r.body.code === 'VALIDATION_ERROR' && r.body.fields.includes(field);
+  const state = async () => JSON.stringify([await get('/plots'), await get('/transactions'), await get('/ledger')]);
+  const before = await state();
+
+  let all = true;
+  for (const v of ['0x10', '1e3', 'Infinity', '-Infinity', 'NaN', '-5', '10abc', ' ', '1,5', null, [], {}]) {
+    all = all && bad(await post('/sale/initiate', { ...sale, deed_area: v }, SR), 'deed_area');
+  }
+  ok('Z1. Malformed / non-finite / negative areas rejected ("0x10", "1e3", "Infinity", "NaN", "-5", null, [] ...)', all);
+  const inf = await fetch(`${base}/sale/initiate`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Demo-Role': SR }, body: '{"plot_id":"P1","seller":"Rahim","buyer":"Karim","deed_no":"D-S2","deed_area":1e999}' });
+  ok('Z2. JSON number that overflows to Infinity (1e999) rejected', inf.status === 400 && (await inf.json()).fields.includes('deed_area'));
+
+  ok('Z3. Malformed plot ids rejected (number, path, object, missing)', bad(await post('/sale/initiate', { ...sale, plot_id: 1 }, SR), 'plot_id')
+    && bad(await post('/sale/initiate', { ...sale, plot_id: '../P1' }, SR), 'plot_id')
+    && bad(await post('/sale/initiate', { ...sale, plot_id: { id: 'P1' } }, SR), 'plot_id')
+    && bad(await post('/sale/initiate', { ...sale, plot_id: undefined }, SR), 'plot_id'));
+  const nf = await post('/sale/initiate', { ...sale, plot_id: 'P99' }, SR);
+  ok('Z4. Unknown plot id gives 404 PLOT_NOT_FOUND (bilingual)', nf.status === 404 && nf.body.code === 'PLOT_NOT_FOUND' && nf.body.bn);
+  ok('Z5. Malformed names rejected (control char, HTML, 101 chars, number, array)',
+    bad(await post('/sale/initiate', { ...sale, seller: 'Ra\u0000him' }, SR), 'seller')
+    && bad(await post('/sale/initiate', { ...sale, buyer: '<script>x</script>' }, SR), 'buyer')
+    && bad(await post('/sale/initiate', { ...sale, buyer: 'K'.repeat(101) }, SR), 'buyer')
+    && bad(await post('/sale/initiate', { ...sale, buyer: 42 }, SR), 'buyer')
+    && bad(await post('/sale/initiate', { ...sale, buyer: ['Karim'] }, SR), 'buyer'));
+  ok('Z6. Malformed deed numbers rejected (path, HTML, 41 chars)', bad(await post('/sale/initiate', { ...sale, deed_no: '../../etc' }, SR), 'deed_no')
+    && bad(await post('/sale/initiate', { ...sale, deed_no: '<D1>' }, SR), 'deed_no')
+    && bad(await post('/sale/initiate', { ...sale, deed_no: 'D'.repeat(41) }, SR), 'deed_no'));
+  ok('Z7. Malformed transaction ids rejected (abc, 0, 1.5, -1)', bad(await post('/sale/abc/register', {}, SR), 'id')
+    && bad(await post('/sale/0/register', {}, SR), 'id') && bad(await post('/sale/1.5/register', {}, SR), 'id')
+    && bad(await post('/sale/-1/register', {}, SR), 'id'));
+  ok('Z8. Every rejected (400/404) request left plots, transactions and ledger unchanged', (await state()) === before);
+
+  const ledgerBefore = (await get('/ledger')).length;
+  let r = await post('/sale/initiate', { ...sale, seller: 'Karim' }, SR);
+  const p1 = (await get('/plots/P1')).plot;
+  ok('Z9. Unauthorized seller blocked (409 NOT_OWNER): only an audit SALE_BLOCKED entry, no plot/transaction change',
+    r.status === 409 && r.body.reasons.some((x) => x.code === 'NOT_OWNER') && (await get('/transactions')).length === 0
+    && p1.status === 'Free' && p1.current_owner === 'Rahim' && (await get('/ledger')).length === ledgerBefore + 1);
+  r = await post('/sale/initiate', { ...sale, deed_area: 10.5 }, SR);
+  ok('Z10. Area larger than the plot blocked (409 AREA_EXCEEDS)', r.status === 409 && r.body.reasons.some((x) => x.code === 'AREA_EXCEEDS'));
+
+  r = await post('/sale/initiate', { ...sale, buyer: 'করিম উদ্দিন', current_owner: 'Hacker', status: 'Free', deed_area: '10', extra: { a: 1 } }, SR);
+  const tx = r.body.transaction;
+  ok('Z11. Bangla names accepted; unknown extra fields are ignored, not stored', r.status === 201 && tx.buyer === 'করিম উদ্দিন'
+    && !('extra' in tx) && !('current_owner' in tx) && (await get('/plots/P1')).plot.current_owner === 'Rahim');
+  ok('Z12. Stored deed area is a real number', typeof tx.deed_area === 'number' && tx.deed_area === 10);
+  ok('Z13. Ledger valid after all rejected attempts', (await get('/ledger/verify')).valid === true);
+  await post('/dev/reset');
+}
+
 async function integrityTests() {
   section('Ledger integrity (live server, attacker edits the stored data)');
   // Build a ledger with a few events: GENESIS, SALE_INITIATED, REGISTRATION_DONE, MUTATION_DONE, MORTGAGE_CREATED
@@ -409,7 +563,7 @@ async function integrityTests() {
   await setup();
   const snap = await get('/ledger');
   ok('I1. Ledger starts with a signed GENESIS entry', snap[0].event_type === 'GENESIS' && snap[0].id === 1 && Boolean(snap[0].signature));
-  await post('/mortgage/release', { plot_id: 'P5' }, SR);
+  await post('/mortgage/release', { plot_id: 'P5', loan_ref: 'LN-I' }, SR);
   const after = await get('/ledger');
   ok('I2. Normal operations only append (old entries unchanged)', after.length === snap.length + 1
     && JSON.stringify(after.slice(0, snap.length)) === JSON.stringify(snap));
@@ -505,17 +659,146 @@ async function restartTests() {
   await stop();
 }
 
+async function demoGuardTests() {
+  section('Demo-only endpoints are off unless explicitly enabled');
+  const devCalls = async () => Promise.all([
+    post('/dev/reset'), post('/dev/tamper'), post('/dev/tamper-smart'), post('/dev/attack', { type: 'owner_change' }),
+  ]);
+  const allDisabled = (rs) => rs.every((r) => r.status === 404 && r.body.code === 'DEMO_DISABLED');
+
+  // Settings missing entirely (no NODE_ENV, no LANDLOCK_DEMO_MODE) -> safe default: off
+  await start({ LANDLOCK_DEMO_MODE: '', NODE_ENV: '' });
+  const before = JSON.stringify(await get('/ledger'));
+  ok('G1. No demo setting: /api/config says demo_mode false', (await get('/config')).demo_mode === false);
+  ok('G2. No demo setting: reset / tamper / tamper-smart / attack all 404 DEMO_DISABLED', allDisabled(await devCalls()));
+  ok('G3. ...and they changed nothing', JSON.stringify(await get('/ledger')) === before && (await get('/plots/P1')).plot.current_owner !== 'FORGED_OWNER');
+  ok('G4. Normal API still works with demo mode off', (await get('/plots')).length === 5 && (await get('/ledger/verify')).valid === true);
+  await stop();
+
+  await start({ LANDLOCK_DEMO_MODE: 'true', NODE_ENV: 'production' });
+  ok('G5. NODE_ENV=production blocks demo endpoints even with LANDLOCK_DEMO_MODE=true', allDisabled(await devCalls())
+    && (await get('/config')).demo_mode === false);
+  await stop();
+  ok('G6. Production start logs a warning that demo mode stays disabled', /demo endpoints stay disabled/.test(serverLog));
+
+  await start({ LANDLOCK_DEMO_MODE: 'yes' });
+  ok('G7. Only the exact value "true" enables demo mode ("yes" does not)', allDisabled(await devCalls()));
+  await stop();
+
+  await start({ LANDLOCK_DEMO_MODE: '' }, ['--demo']);
+  ok('G8. "--demo" flag (npm run demo) enables the demo endpoints', (await get('/config')).demo_mode === true && (await post('/dev/reset')).status === 200);
+  await stop();
+
+  await start();
+  ok('G9. LANDLOCK_DEMO_MODE=true enables them', (await get('/config')).demo_mode === true && (await post('/dev/reset')).status === 200);
+  await stop();
+}
+
+async function keyAndPersistenceTests() {
+  section('Signing key handling, persistence across restarts, safe writes');
+  await start();
+  await post('/dev/reset');
+  const s = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-K1', deed_area: 10 }, SR);
+  await post(`/sale/${s.body.transaction.id}/register`, {}, SR);
+  const key1 = (await get('/ledger/public-key')).publicKey;
+  await stop();
+  await start();
+  ok('K1. After restart: same public key, transaction still there, ledger verifies',
+    (await get('/ledger/public-key')).publicKey === key1 && (await get('/transactions')).length === 1 && (await get('/ledger/verify')).valid === true);
+  await stop();
+
+  const keyBytes = fs.readFileSync(ENV.LANDLOCK_KEY_FILE);
+  const dataBytes = fs.readFileSync(DATA_FILE);
+  const unchanged = () => fs.readFileSync(DATA_FILE).equals(dataBytes);
+
+  fs.renameSync(ENV.LANDLOCK_KEY_FILE, `${ENV.LANDLOCK_KEY_FILE}.aside`);
+  let f = await startExpectFail();
+  ok('K2. Key file missing while signed data exists: refuses to start, no new key made, data untouched',
+    f.code === 1 && /signing key file keys\.json is missing/.test(f.stderr) && !fs.existsSync(ENV.LANDLOCK_KEY_FILE) && unchanged());
+  fs.renameSync(`${ENV.LANDLOCK_KEY_FILE}.aside`, ENV.LANDLOCK_KEY_FILE);
+
+  fs.writeFileSync(ENV.LANDLOCK_KEY_FILE, '{ not json');
+  f = await startExpectFail();
+  ok('K3. Unreadable key file: refuses to start, file not overwritten', f.code === 1 && /not valid JSON/.test(f.stderr)
+    && fs.readFileSync(ENV.LANDLOCK_KEY_FILE, 'utf8') === '{ not json');
+
+  const crypto = require('crypto');
+  const other = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
+  fs.writeFileSync(ENV.LANDLOCK_KEY_FILE, JSON.stringify({ ...JSON.parse(keyBytes), publicKey: other }));
+  f = await startExpectFail();
+  ok('K4. Public and private key that do not match: refuses to start', f.code === 1 && /do not belong together/.test(f.stderr));
+
+  const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 });
+  fs.writeFileSync(ENV.LANDLOCK_KEY_FILE, JSON.stringify({
+    publicKey: rsa.publicKey.export({ type: 'spki', format: 'pem' }), privateKey: rsa.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  }));
+  f = await startExpectFail();
+  ok('K5. Non-Ed25519 key: refuses to start', f.code === 1 && /must hold an Ed25519 key pair/.test(f.stderr));
+  fs.writeFileSync(ENV.LANDLOCK_KEY_FILE, keyBytes);
+  ok('K6. None of the refused starts changed data.json', unchanged());
+
+  fs.writeFileSync(DATA_FILE, '{"plots": [ broken');
+  f = await startExpectFail();
+  ok('K7. Corrupted data.json: refuses to start and leaves the file exactly as it was', f.code === 1 && /not valid JSON/.test(f.stderr)
+    && fs.readFileSync(DATA_FILE, 'utf8') === '{"plots": [ broken');
+  fs.writeFileSync(DATA_FILE, dataBytes);
+
+  const fresh = path.join(TMP, 'fresh');
+  fs.mkdirSync(fresh);
+  const freshEnv = { LANDLOCK_DATA_DIR: fresh, LANDLOCK_TRUST_DIR: path.join(fresh, 'trusted'), LANDLOCK_KEY_FILE: path.join(fresh, 'keys.json') };
+  f = await startExpectFail({ ...freshEnv, NODE_ENV: 'production' });
+  ok('K8. Production with no key file: refuses to generate one', f.code === 1 && /automatic key generation is disabled/.test(f.stderr)
+    && !fs.existsSync(freshEnv.LANDLOCK_KEY_FILE));
+  f = await startExpectFail({ ...freshEnv, LANDLOCK_REQUIRE_KEY: 'true' });
+  ok('K9. LANDLOCK_REQUIRE_KEY=true with no key file: refuses to generate one', f.code === 1 && !fs.existsSync(freshEnv.LANDLOCK_KEY_FILE));
+  fs.rmSync(fresh, { recursive: true, force: true });
+  fs.mkdirSync(fresh);
+  await start(freshEnv);
+  ok('K10. Brand-new empty database in development: key generated once, ledger valid', fs.existsSync(freshEnv.LANDLOCK_KEY_FILE)
+    && (await get('/ledger/verify')).valid === true);
+  await stop();
+
+  await start();
+  f = await startExpectFail({ PORT: Number(PORT) + 1 });
+  ok('K11. A second server on the same data folder is refused (lock file)', f.code === 1 && /already using this data folder/.test(f.stderr));
+  ok('K12. The running server is unaffected', (await get('/ledger/verify')).valid === true);
+
+  // Disk failure midway through a write: data.json is temporarily replaced by a folder
+  const before = JSON.stringify([await get('/plots'), await get('/transactions'), await get('/ledger')]);
+  fs.renameSync(DATA_FILE, `${DATA_FILE}.aside`);
+  fs.mkdirSync(DATA_FILE);
+  const r = await post('/sale/initiate', { plot_id: 'P2', seller: 'Karim', buyer: 'Jamal', deed_no: 'D-K2', deed_area: 8 }, SR);
+  ok('K13. Write fails on disk: clean 500 SERVER_ERROR (bilingual), "not saved"', r.status === 500 && r.body.code === 'SERVER_ERROR' && r.body.bn);
+  ok('K14. ...and the half-finished change was rolled back (no lock, no transaction, no ledger entry)',
+    JSON.stringify([await get('/plots'), await get('/transactions'), await get('/ledger')]) === before && (await get('/ledger/verify')).valid === true);
+  fs.rmdirSync(DATA_FILE);
+  fs.renameSync(`${DATA_FILE}.aside`, DATA_FILE);
+  ok('K15. After the disk recovers the same sale works', (await post('/sale/initiate', { plot_id: 'P2', seller: 'Karim', buyer: 'Jamal', deed_no: 'D-K2', deed_area: 8 }, SR)).status === 201);
+  await stop();
+  await start();
+  ok('K16. ...and is still there after a restart, ledger valid', (await get('/plots/P2')).plot.status === 'Pending' && (await get('/ledger/verify')).valid === true);
+  await stop();
+
+  const leftovers = [ENV.LANDLOCK_DATA_DIR, ENV.LANDLOCK_TRUST_DIR].flatMap((d) => fs.readdirSync(d)).filter((n) => n.endsWith('.tmp'));
+  ok('K17. No temporary files left behind by the atomic writes', leftovers.length === 0);
+  ok('K18. Server output never contained a private key or the data folder path', !/PRIVATE KEY/.test(serverLog) && !serverLog.includes(TMP));
+}
+
 (async () => {
   try {
     await start();
     await storyTests();
     await roleTests();
     await validationTests();
+    await strictValidationTests();
     await disputeTests();
     await fullPlotTests();
     await wordingTests();
+    await mortgageLookupConcurrencyTests();
     await integrityTests();
     await restartTests();
+    await demoGuardTests();
+    await keyAndPersistenceTests();
   } catch (e) {
     fails++;
     console.log('FAIL test run crashed:', e.message);

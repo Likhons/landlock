@@ -12,6 +12,7 @@ const db = require('./db');
 const keys = require('./keys');
 const rbac = require('./rbac');
 const { checkSale, checkMortgage, partialSale } = require('./rules');
+const { writeJsonAtomic } = require('./fsutil');
 
 const GENESIS = '0'.repeat(64);
 const SAMPLE_NOTICE = 'DEMO/SAMPLE DATA - not verified official khatian records';
@@ -61,7 +62,7 @@ function writeCheckpoint() {
   };
   cp.signature = keys.sign(cpPayload(cp));
   fs.mkdirSync(CP_DIR, { recursive: true });
-  fs.writeFileSync(CP_FILE, JSON.stringify(cp, null, 2));
+  writeJsonAtomic(CP_FILE, cp);
   trusted = cp;
   checkpointProblem = null;
 }
@@ -119,6 +120,7 @@ function replay(ledger) {
 
     switch (e.event_type) {
       case 'SALE_INITIATED':
+        if (typeof d.deed_area !== 'number' || !Number.isFinite(d.deed_area) || d.deed_area <= 0) return fail('deed area is not a positive number');
         if (partialSale(plot, d.deed_area)) return fail('partial sale (deed area smaller than the plot) is not supported');
         if (!checkSale(plot, d.seller, d.deed_area, {
           buyer: d.buyer, deedNo: d.deed_no, usedDeedNos: [...txs.values()].map((t) => t.deed_no),
@@ -162,6 +164,7 @@ function replay(ledger) {
         break;
       case 'MORTGAGE_RELEASED':
         if (!plot.mortgage) return fail('released a mortgage that does not exist');
+        if (d.loan_ref !== plot.mortgage.loan_ref) return fail('released loan does not match the recorded mortgage');
         plot.mortgage = null;
         break;
       default: // SALE_BLOCKED / MORTGAGE_BLOCKED: audit only, no state change
@@ -277,6 +280,8 @@ function forPlot(plot_id) {
 // ---- Start-up ----
 (function init() {
   const { ledger } = db.get();
+  // A new signing key is allowed only for a brand-new database (no ledger, no checkpoint).
+  keys.init({ allowGenerate: ledger.length === 0 && !fs.existsSync(CP_FILE) });
   const file = readCheckpointFile();
   if (file.cp) trusted = file.cp;
   else if (file.bad) checkpointProblem = 'bad';

@@ -4,6 +4,8 @@
 // seed() is also the trusted starting state: the ledger's GENESIS entry is checked against it.
 const fs = require('fs');
 const path = require('path');
+const { fatal } = require('./config');
+const { writeJsonAtomic, acquireLock } = require('./fsutil');
 const DIR = process.env.LANDLOCK_DATA_DIR || __dirname;
 const FILE = path.join(DIR, 'data.json');
 
@@ -62,11 +64,57 @@ function seed() {
   };
 }
 
-let db = fs.existsSync(FILE) ? JSON.parse(fs.readFileSync(FILE, 'utf8')) : seed();
+// A plot is identified by mouza + khatian no. + dag no. (ignoring case and spaces); the combination must be unique.
+const plotKey = (p) => [p.mouza, p.khatian_no, p.dag_no].map((v) => String(v).trim().toLowerCase()).join('|');
+function duplicatePlotKeys(plots) {
+  const seen = new Map();
+  const dups = [];
+  for (const p of plots) {
+    const k = plotKey(p);
+    if (seen.has(k)) dups.push(`${seen.get(k)} and ${p.id} (mouza ${p.mouza}, khatian ${p.khatian_no}, dag ${p.dag_no})`);
+    else seen.set(k, p.id);
+  }
+  return dups;
+}
 
-function save() { fs.writeFileSync(FILE, JSON.stringify(db, null, 2)); }
+acquireLock(`${FILE}.lock`);
+
+// Load the existing file, or start from the sample data when there is none. A file that cannot be
+// read is NEVER replaced automatically: the server stops and leaves it untouched.
+function load() {
+  if (!fs.existsSync(FILE)) return { data: seed(), fresh: true };
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+  } catch (e) {
+    fatal(`${path.basename(FILE)} is not valid JSON, so it was NOT overwritten. Restore it from a backup, `
+      + 'or move it aside to start again with the sample data.');
+  }
+  if (!data || !Array.isArray(data.plots) || !Array.isArray(data.transactions) || !Array.isArray(data.ledger)) {
+    fatal(`${path.basename(FILE)} does not have the expected plots / transactions / ledger lists, so it was NOT overwritten.`);
+  }
+  return { data, fresh: false };
+}
+
+const loaded = load();
+let db = loaded.data;
+
+// Refuse to start on ambiguous plot identifiers (a database constraint the JSON file cannot enforce itself)
+const dups = duplicatePlotKeys(db.plots);
+if (dups.length) fatal(`duplicate plot identifiers in ${path.basename(FILE)}: ${dups.join('; ')}`);
+
+function save() { writeJsonAtomic(FILE, db); }
 function reset() { db = seed(); save(); }
 function get() { return db; }
 
-save();
-module.exports = { get, save, reset, seed };
+// All-or-nothing writes: a copy is taken before a write request changes anything. If the request fails
+// midway (e.g. a disk error after the plot was updated but before the ledger entry was written), the
+// copy is put back in memory and written again, so no half-finished change survives.
+function snapshot() { return JSON.stringify(db); }
+function restore(copy) {
+  db = JSON.parse(copy);
+  try { save(); } catch (_) { /* disk still failing: memory is correct; the integrity check reports any gap */ }
+}
+
+if (loaded.fresh) save();
+module.exports = { get, save, reset, seed, snapshot, restore };
