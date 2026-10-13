@@ -25,6 +25,36 @@ function partialSale(plot, deedArea) {
   };
 }
 
+// ---- Registration vs mutation: Sub-Registry deed record vs khatian (AC Land record) ----
+// plot.registry = the latest registered deed for this plot (sample record imported from the
+// Sub-Registry office, or the deed registered through LandLock). The khatian is the plot itself.
+// The comparison only runs on a Free plot: a LandLock sale in progress (Pending) or a rejected
+// mutation (Disputed) already explains a difference and has its own reason.
+const registryOwnerMismatch = (plot) => Boolean(plot.registry && plot.status === 'Free' && plot.registry.buyer !== plot.current_owner);
+const registryAreaMismatch = (plot) => Boolean(plot.registry && plot.registry.area !== plot.area);
+
+function registryOwnerReason(plot, forAction) {
+  const r = plot.registry;
+  return {
+    level: RED, code: 'REGISTRY_OWNER_MISMATCH',
+    bn: `সাব-রেজিস্ট্রি অফিসের সর্বশেষ দলিল (${r.deed_no}) অনুযায়ী জমিটি ${r.seller}-এর কাছ থেকে ${r.buyer} কিনেছেন, কিন্তু খতিয়ানে এখনও মালিক ${plot.current_owner}। দলিল হয়েছে কিন্তু নামজারি হয়নি, অথবা কোনো রেকর্ডে ভুল আছে।`
+      + (forAction ? ' এসি ল্যান্ড অফিসার রেকর্ড না মিলানো পর্যন্ত বিক্রয় বা বন্ধক করা যাবে না।' : ' রেকর্ড না মিলানো পর্যন্ত বিক্রয় ও বন্ধক বন্ধ থাকবে।')
+      + ' (এটি অমিল, প্রতারণার প্রমাণ নয়।)',
+    en: `The latest Sub-Registry deed (${r.deed_no}) says ${r.buyer} bought this plot from ${r.seller}, but the khatian still shows ${plot.current_owner} as owner. The deed was registered but mutation was not done, or one record is wrong.`
+      + (forAction ? ' No sale or mortgage until the AC Land Officer reconciles the records.' : ' Sales and mortgages are blocked until the records are reconciled.')
+      + ' (This is a mismatch, not proof of fraud.)',
+  };
+}
+
+function registryAreaReason(plot) {
+  const r = plot.registry;
+  return {
+    level: YELLOW, code: 'REGISTRY_AREA_MISMATCH',
+    bn: `দলিলে (${r.deed_no}) জমির পরিমাণ ${r.area} শতক, কিন্তু খতিয়ানে ${plot.area} শতক। পরিমাপ ও রেকর্ড যাচাই প্রয়োজন। (এটি অমিল, প্রতারণার প্রমাণ নয়।)`,
+    en: `The deed (${r.deed_no}) records ${r.area} decimal, but the khatian records ${plot.area} decimal. The measurement and records need checking. (This is a mismatch, not proof of fraud.)`,
+  };
+}
+
 // Deed numbers are compared without spaces/case, so "d-1" and " D-1 " count as the same deed.
 const normDeed = (v) => String(v).trim().toUpperCase();
 
@@ -41,6 +71,7 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
     });
   }
   if (plot.status === 'Disputed') reasons.push(disputedReason());
+  if (registryOwnerMismatch(plot)) reasons.push(registryOwnerReason(plot, true));
   if (plot.mortgage) {
     reasons.push({
       level: RED, code: 'PLOT_MORTGAGED',
@@ -98,6 +129,13 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
   if (buyer !== undefined) {
     checks.push({ code: 'DIFFERENT_PARTIES', passed: !failed('SAME_PARTY'), bn: 'ক্রেতা ও বিক্রেতা ভিন্ন ব্যক্তি', en: 'Buyer and seller are different people' });
   }
+  if (plot.registry) {
+    checks.push({
+      code: 'REGISTRY_OWNER_MATCH', passed: !failed('REGISTRY_OWNER_MISMATCH'),
+      bn: `সাব-রেজিস্ট্রি দলিল (${plot.registry.deed_no}) ও খতিয়ানের মালিক মিলেছে`,
+      en: `Sub-Registry deed (${plot.registry.deed_no}) and khatian agree on the owner`,
+    });
+  }
   if (deedNo !== undefined) {
     checks.push({
       code: 'UNIQUE_DEED', passed: !failed('DUPLICATE_DEED'),
@@ -120,6 +158,7 @@ function checkMortgage(plot, owner, bank) {
     });
   }
   if (plot.status === 'Disputed') reasons.push(disputedReason());
+  if (registryOwnerMismatch(plot)) reasons.push(registryOwnerReason(plot, true));
   if (plot.mortgage) {
     reasons.push({
       level: RED, code: 'DOUBLE_MORTGAGE',
@@ -203,6 +242,9 @@ function assessPlot(plot, activeTx, ledgerStatus, disputedTx) {
     });
   }
 
+  if (registryOwnerMismatch(plot)) reasons.push(registryOwnerReason(plot, false));
+  if (registryAreaMismatch(plot)) reasons.push(registryAreaReason(plot));
+
   reasons.push(...checkSurveyChain(plot));
 
   // Green only means none of the configured checks raised a warning. It is not a safety guarantee.
@@ -239,4 +281,4 @@ const NOT_CHECKED = [
   },
 ];
 
-module.exports = { checkSale, checkMortgage, assessPlot, partialSale, RESULT_NOTICE, NOT_CHECKED };
+module.exports = { checkSale, checkMortgage, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED };

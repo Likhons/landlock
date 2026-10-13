@@ -11,7 +11,7 @@ const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, assessPlot, partialSale, RESULT_NOTICE, NOT_CHECKED } = require('./rules');
+const { checkSale, checkMortgage, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED } = require('./rules');
 
 const app = express();
 app.use(cors());
@@ -222,6 +222,7 @@ app.post('/api/sale/:id/register', guard('sale.register'), (req, res) => {
   if (tx.reg_status === 'done') return res.status(400).json({ error: 'Deed is already registered' });
   tx.reg_status = 'done';
   tx.reg_date = new Date().toISOString();
+  findPlot(tx.plot_id).registry = ledger.deedRecord(tx);
   db.save();
   ledger.append(tx.plot_id, 'REGISTRATION_DONE', { tx_id: tx.id, by_role: req.role });
   res.json(tx);
@@ -285,6 +286,30 @@ app.post('/api/sale/:id/cancel', guard('sale.cancel'), (req, res) => {
   res.json({ transaction: tx, plot });
 });
 
+// ---- Registration vs mutation mismatch ----
+// The plot's latest Sub-Registry deed names a different buyer than the khatian owner (the deed was
+// registered, but mutation never happened). The AC Land Officer completes that mutation here, so the
+// khatian finally shows the deed's buyer. Until then sales and mortgages on the plot are blocked.
+app.post('/api/plots/:id/reconcile', guard('sale.mutate'), (req, res) => {
+  const plot = findPlot(req.params.id);
+  if (!plot) return plotNotFound(res);
+  if (!registryOwnerMismatch(plot) || plot.mortgage) {
+    return res.status(409).json({
+      error: 'Nothing to reconcile: the Sub-Registry deed and the khatian already agree, or the plot is locked',
+      code: 'NOTHING_TO_RECONCILE',
+      bn: 'মেলানোর কিছু নেই: দলিল ও খতিয়ান মিলে আছে, অথবা জমিটি লক করা।',
+      en: 'Nothing to reconcile: the deed and the khatian already agree, or the plot is locked.',
+    });
+  }
+  const previous_owner = plot.current_owner;
+  plot.current_owner = plot.registry.buyer;
+  db.save();
+  ledger.append(plot.id, 'REGISTRY_MUTATION_DONE', {
+    deed_no: plot.registry.deed_no, previous_owner, new_owner: plot.current_owner, by_role: req.role,
+  });
+  res.json({ plot });
+});
+
 // ---- Bank mortgage ----
 app.post('/api/mortgage/create', guard('mortgage.create'), (req, res) => {
   const plot_id = plotId(req.body.plot_id);
@@ -336,7 +361,12 @@ app.get('/api/gap', (req, res) => {
   const rows = db.get().transactions
     .filter((t) => ['active', 'disputed'].includes(t.state) && t.reg_status === 'done' && t.mutation_status !== 'done')
     .map((t) => ({ ...t, days_waiting: Math.floor((now - new Date(t.reg_date).getTime()) / 86400000) }));
-  res.json(rows);
+  const fromRegistry = db.get().plots.filter(registryOwnerMismatch).map((p) => ({
+    id: `R-${p.id}`, source: 'sub_registry', state: 'unmutated', plot_id: p.id,
+    seller: p.registry.seller, buyer: p.registry.buyer, deed_no: p.registry.deed_no,
+    days_waiting: p.registry.date ? Math.floor((now - new Date(p.registry.date).getTime()) / 86400000) : null,
+  }));
+  res.json([...rows, ...fromRegistry]);
 });
 
 // ---- Demo helpers (local hackathon demo only) ----

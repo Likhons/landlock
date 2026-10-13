@@ -73,7 +73,7 @@ async function storyTests() {
   await post(`/sale/${txId}/register`, {}, SR);
   let p = await get('/plots/P1');
   ok('3. Registered but not mutated -> Yellow', p.risk.level === 'yellow' && p.risk.reasons[0].code === 'REG_NOT_MUTATED');
-  ok('4. Gap dashboard lists the deed', (await get('/gap')).length === 1);
+  ok('4. Gap dashboard lists the deed', (await get('/gap')).filter((g) => !g.source).length === 1);
 
   await post(`/sale/${txId}/mutate`, {}, AC);
   p = await get('/plots/P1');
@@ -445,7 +445,7 @@ async function mortgageLookupConcurrencyTests() {
   ok('L2. Lookup ignores case and extra spaces', ids(await get('/plots?mouza=%20rampura%20&dag_no=123')) === 'P1');
   ok('L3. Partial lookup (mouza only) returns all matches', ids(await get('/plots?mouza=Rampura')) === 'P1,P2');
   ok('L4. No match returns an empty list', (await get('/plots?mouza=Rampura&dag_no=999')).length === 0);
-  ok('L5. No filters returns all plots (unchanged)', (await get('/plots')).length === 5);
+  ok('L5. No filters returns all plots (unchanged)', (await get('/plots')).length === 7);
 
   await stop();
   const original = fs.readFileSync(DATA_FILE);
@@ -546,6 +546,100 @@ async function strictValidationTests() {
   ok('Z12. Stored deed area is a real number', typeof tx.deed_area === 'number' && tx.deed_area === 10);
   ok('Z13. Ledger valid after all rejected attempts', (await get('/ledger/verify')).valid === true);
   await post('/dev/reset');
+}
+
+async function registryMismatchTests() {
+  section('Registration vs mutation mismatch: Sub-Registry deed vs khatian (P6, P7)');
+  await post('/dev/reset');
+  const codes = (p) => p.risk.reasons.map((r) => r.code);
+  let p6 = await get('/plots/P6');
+  const om = p6.risk.reasons.find((r) => r.code === 'REGISTRY_OWNER_MISMATCH');
+  ok('RM1. P6: deed says Shapla bought, khatian says Monir -> Red, explained in both languages',
+    p6.risk.level === 'red' && om && /1450\/2019/.test(om.en) && /Shapla/.test(om.en) && /Monir/.test(om.en)
+    && /not proof of fraud/.test(om.en) && /প্রতারণার প্রমাণ নয়/.test(om.bn));
+  const p7 = await get('/plots/P7');
+  const am = p7.risk.reasons.find((r) => r.code === 'REGISTRY_AREA_MISMATCH');
+  ok('RM2. P7: deed 14 vs khatian 18 decimal -> Yellow area warning (owner agrees)',
+    p7.risk.level === 'yellow' && am && /14/.test(am.en) && /18/.test(am.en) && !codes(p7).includes('REGISTRY_OWNER_MISMATCH'));
+  ok('RM3. Plots without a Sub-Registry record are unaffected (P1 stays Green)', (await get('/plots/P1')).risk.level === 'green');
+
+  let r = await post('/sale/initiate', { plot_id: 'P6', seller: 'Monir', buyer: 'Kamrul', deed_no: 'D-RM1', deed_area: 12 }, SR);
+  ok('RM4. Khatian owner Monir cannot sell P6 again (double-sell blocked: REGISTRY_OWNER_MISMATCH)',
+    r.status === 409 && r.body.reasons.some((x) => x.code === 'REGISTRY_OWNER_MISMATCH') && !r.body.reasons.some((x) => x.code === 'NOT_OWNER'));
+  r = await post('/sale/initiate', { plot_id: 'P6', seller: 'Shapla', buyer: 'Kamrul', deed_no: 'D-RM2', deed_area: 12 }, SR);
+  ok('RM5. Deed buyer Shapla cannot sell either until the khatian is updated', r.status === 409 && r.body.reasons.some((x) => x.code === 'NOT_OWNER'));
+  r = await post('/mortgage/create', { plot_id: 'P6', owner: 'Monir', bank: 'Sonali Bank', loan_ref: 'LN-RM' }, SR);
+  ok('RM6. Mortgage on P6 blocked too', r.status === 409 && r.body.reasons.some((x) => x.code === 'REGISTRY_OWNER_MISMATCH'));
+  const gapRow = (await get('/gap')).find((g) => g.plot_id === 'P6');
+  ok('RM7. Gap dashboard lists the unmutated 2019 deed (source: Sub-Registry, years waiting)',
+    gapRow && gapRow.source === 'sub_registry' && gapRow.deed_no === '1450/2019' && gapRow.days_waiting > 1000);
+
+  ok('RM8. Buyer / Sub-Registrar cannot reconcile (403)', (await post('/plots/P6/reconcile', {}, BUYER)).status === 403
+    && (await post('/plots/P6/reconcile', {}, SR)).status === 403);
+  ok('RM9. Nothing to reconcile when deed and khatian agree on the owner (P7: 409)',
+    (await post('/plots/P7/reconcile', {}, AC)).body.code === 'NOTHING_TO_RECONCILE');
+  r = await post('/plots/P6/reconcile', {}, AC);
+  p6 = await get('/plots/P6');
+  const ev = p6.history.find((h) => h.event_type === 'REGISTRY_MUTATION_DONE');
+  ok('RM10. AC Land Officer completes the mutation of deed 1450/2019: owner Shapla, signed event, mismatch gone',
+    r.status === 200 && p6.plot.current_owner === 'Shapla' && ev && ev.signature && ev.data.deed_no === '1450/2019'
+    && ev.data.previous_owner === 'Monir' && ev.data.by_role === AC && !codes(p6).includes('REGISTRY_OWNER_MISMATCH') && p6.risk.level === 'green');
+  ok('RM11. Reconciling twice is refused (409)', (await post('/plots/P6/reconcile', {}, AC)).status === 409);
+  ok('RM12. Gap dashboard no longer lists P6', !(await get('/gap')).some((g) => g.plot_id === 'P6'));
+  r = await post('/sale/initiate', { plot_id: 'P6', seller: 'Shapla', buyer: 'Kamrul', deed_no: 'D-RM3', deed_area: 12 }, SR);
+  ok('RM13. Now Shapla can sell, with "deed and khatian agree" in the passed checks', r.status === 201
+    && r.body.checks.some((c) => c.code === 'REGISTRY_OWNER_MATCH' && c.passed));
+  ok('RM14. ...and Monir no longer can (NOT_OWNER)', (await post('/sale/initiate', { plot_id: 'P6', seller: 'Monir', buyer: 'X', deed_no: 'D-RM4', deed_area: 12 }, SR))
+    .body.reasons.some((x) => x.code === 'NOT_OWNER'));
+
+  r = await post('/sale/initiate', { plot_id: 'P7', seller: 'Rafiq', buyer: 'Tania', deed_no: 'D-RM5', deed_area: 18 }, SR);
+  ok('RM15. Area mismatch is a warning, not a block: Rafiq can sell P7', r.status === 201);
+  const tx7 = r.body.transaction.id;
+  await post(`/sale/${tx7}/register`, {}, SR);
+  let p = await get('/plots/P7');
+  ok('RM16. A deed registered in LandLock becomes the plot\'s Sub-Registry record (no duplicate warning while pending)',
+    p.plot.registry.deed_no === 'D-RM5' && p.plot.registry.buyer === 'Tania' && !codes(p).includes('REGISTRY_OWNER_MISMATCH'));
+  await post(`/sale/${tx7}/mutate`, {}, AC);
+  p = await get('/plots/P7');
+  ok('RM17. After mutation deed and khatian agree on owner and area', p.plot.current_owner === 'Tania'
+    && !codes(p).includes('REGISTRY_OWNER_MISMATCH') && !codes(p).includes('REGISTRY_AREA_MISMATCH'));
+  ok('RM18. Ledger valid (replay rebuilds Sub-Registry records and reconciliations)', (await get('/ledger/verify')).valid === true);
+
+  await stop(); await start();
+  ok('RM19. After restart: still valid, P6 owned by Shapla', (await get('/ledger/verify')).valid === true
+    && (await get('/plots/P6')).plot.current_owner === 'Shapla');
+
+  // Someone edits the Sub-Registry record in data.json to hide the mismatch
+  await post('/dev/reset');
+  await stop();
+  let d = readData();
+  d.plots.find((x) => x.id === 'P6').registry.buyer = 'Monir';
+  writeData(d);
+  await start();
+  const v = await get('/ledger/verify');
+  ok('RM20. Editing the Sub-Registry record on disk to hide the mismatch is detected', !v.valid && v.kind === 'state' && /P6/.test(v.reason));
+
+  // A ledger created before P6/P7 existed (5-plot GENESIS) must still verify
+  await post('/dev/reset');
+  const genesis = (await get('/ledger'))[0];
+  await stop();
+  const crypto = require('crypto');
+  const { privateKey } = JSON.parse(fs.readFileSync(ENV.LANDLOCK_KEY_FILE, 'utf8'));
+  const legacyPlots = genesis.data.plots.filter((x) => ['P1', 'P2', 'P3', 'P4', 'P5'].includes(x.id));
+  const g = { id: 1, plot_id: null, event_type: 'GENESIS', data: { ...genesis.data, plots: legacyPlots }, timestamp: new Date().toISOString(), prev_hash: '0'.repeat(64) };
+  g.hash = crypto.createHash('sha256').update(g.prev_hash + JSON.stringify({ plot_id: g.plot_id, event_type: g.event_type, data: g.data, timestamp: g.timestamp })).digest('hex');
+  g.signature = crypto.sign(null, Buffer.from(g.hash), privateKey).toString('base64');
+  g.signer = genesis.signer;
+  writeData({ plots: JSON.parse(JSON.stringify(legacyPlots)), transactions: [], ledger: [g] });
+  const cp = { length: 1, head_hash: g.hash, genesis_hash: g.hash, updated_at: new Date().toISOString() };
+  cp.signature = crypto.sign(null, Buffer.from(JSON.stringify(cp)), privateKey).toString('base64');
+  fs.writeFileSync(CP_FILE, JSON.stringify(cp, null, 2));
+  await start();
+  ok('RM21. Older 5-plot ledger (before P6/P7) still verifies', (await get('/ledger/verify')).valid === true && (await get('/plots')).length === 5);
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-RM6', deed_area: 10 }, SR);
+  ok('RM22. ...and keeps working (sale accepted, ledger valid)', r.status === 201 && (await get('/ledger/verify')).valid === true);
+  await post('/dev/reset');
+  ok('RM23. Reset brings in the 7 sample plots', (await get('/plots')).length === 7 && (await get('/ledger/verify')).valid === true);
 }
 
 async function integrityTests() {
@@ -672,7 +766,7 @@ async function demoGuardTests() {
   ok('G1. No demo setting: /api/config says demo_mode false', (await get('/config')).demo_mode === false);
   ok('G2. No demo setting: reset / tamper / tamper-smart / attack all 404 DEMO_DISABLED', allDisabled(await devCalls()));
   ok('G3. ...and they changed nothing', JSON.stringify(await get('/ledger')) === before && (await get('/plots/P1')).plot.current_owner !== 'FORGED_OWNER');
-  ok('G4. Normal API still works with demo mode off', (await get('/plots')).length === 5 && (await get('/ledger/verify')).valid === true);
+  ok('G4. Normal API still works with demo mode off', (await get('/plots')).length === 7 && (await get('/ledger/verify')).valid === true);
   await stop();
 
   await start({ LANDLOCK_DEMO_MODE: 'true', NODE_ENV: 'production' });
@@ -795,6 +889,7 @@ async function keyAndPersistenceTests() {
     await fullPlotTests();
     await wordingTests();
     await mortgageLookupConcurrencyTests();
+    await registryMismatchTests();
     await integrityTests();
     await restartTests();
     await demoGuardTests();

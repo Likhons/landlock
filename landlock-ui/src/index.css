@@ -386,3 +386,18 @@ b, strong { font-weight: 600; }
   .status-pill { grid-column: 1 / -1; grid-row: 2; justify-self: start; font-size: 12.5px; padding: 5px 11px; }
   .brand h1 { font-size: 23px; }
 }
+
+/* ---------- Deed vs khatian comparison ---------- */
+.compare { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) 30px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.compare > div { padding: 9px 12px; border-top: 1px solid var(--border); display: flex; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+.compare > .cmp-h { border-top: 0; background: var(--surface-2); font-size: 12.5px; font-weight: 700; color: var(--text); flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }
+.compare > .cmp-h span { font-weight: 500; color: var(--muted); font-size: 11.5px; }
+.cmp-k { font-size: 13px; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+.cmp-v { font-weight: 700; font-size: 15px; }
+.cmp-v.small { font-weight: 500; font-size: 13px; color: var(--muted); }
+.compare > .cmp-m { padding-left: 0; padding-right: 10px; justify-content: center; }
+.cmp-ok { color: var(--green-bd); } .cmp-bad { color: var(--red-bd); } .cmp-warn { color: var(--amber-bd); } .cmp-wait { color: var(--faint); }
+@media (max-width: 560px) {
+  .compare > div { padding: 8px 8px; }
+  .cmp-v { font-size: 14px; }
+}

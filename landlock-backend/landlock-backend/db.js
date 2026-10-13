@@ -58,6 +58,30 @@ function seed() {
           { survey: 'BS', year: 2012, owner: 'Nasrin', area: 20, source: 'inheritance', ref: 'Warish certificate' },
         ],
       },
+      // P6 and P7 carry a SAMPLE record of the latest deed registered at the Sub-Registry office
+      // ("registry"), so LandLock can compare it with the khatian (AC Land record), i.e. the plot itself.
+      // P6: deed says Monir sold to Shapla in 2019, but the khatian still shows Monir (mutation never done).
+      {
+        id: 'P6', mouza: 'Mirpur', khatian_no: '412', dag_no: '77', area: 12, current_owner: 'Monir', status: 'Free', mortgage: null,
+        registry: { office: 'Sub-Registry Office (sample)', deed_no: '1450/2019', date: '2019-03-14', seller: 'Monir', buyer: 'Shapla', area: 12 },
+        survey: [
+          { survey: 'CS', year: 1924, owner: 'Abdul Kader', area: 12, source: 'original', ref: 'CS Khatian 60' },
+          { survey: 'SA', year: 1960, owner: 'Abdul Kader', area: 12, source: 'original', ref: 'SA Khatian 71' },
+          { survey: 'RS', year: 1985, owner: 'Abdul Kader', area: 12, source: 'original', ref: 'RS Khatian 90' },
+          { survey: 'BS', year: 2012, owner: 'Monir', area: 12, source: 'inheritance', ref: 'Warish certificate' },
+        ],
+      },
+      // P7: deed says Rafiq bought 14 decimal, but the khatian records 18 decimal.
+      {
+        id: 'P7', mouza: 'Savar', khatian_no: '518', dag_no: '204', area: 18, current_owner: 'Rafiq', status: 'Free', mortgage: null,
+        registry: { office: 'Sub-Registry Office (sample)', deed_no: '2231/2021', date: '2021-08-02', seller: 'Jalal', buyer: 'Rafiq', area: 14 },
+        survey: [
+          { survey: 'CS', year: 1924, owner: 'Karim Bux', area: 14, source: 'original', ref: 'CS Khatian 33' },
+          { survey: 'SA', year: 1960, owner: 'Karim Bux', area: 14, source: 'original', ref: 'SA Khatian 41' },
+          { survey: 'RS', year: 1985, owner: 'Karim Bux', area: 14, source: 'original', ref: 'RS Khatian 58' },
+          { survey: 'BS', year: 2012, owner: 'Jalal', area: 14, source: 'inheritance', ref: 'Warish certificate' },
+        ],
+      },
     ],
     transactions: [],
     ledger: [],

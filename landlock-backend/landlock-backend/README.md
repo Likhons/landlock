@@ -78,6 +78,7 @@ A **409-blocked** sale or mortgage attempt changes no plot or transaction, but i
 - **Mortgage:** double mortgage, mortgage during a sale and mortgage by a non-owner are blocked; release needs the matching loan number (`LOAN_MISMATCH`).
 - **Plot identity:** mouza + khatian no. + dag no. must be unique (the server refuses to start otherwise); `GET /api/plots?mouza=&khatian_no=&dag_no=` looks plots up.
 - **Explainable result:** Green means "No warnings found", never "safe". Accepted sales return `checks` (every check that ran) and `not_checked` (seller identity, legal title).
+- **Deed vs khatian (registration–mutation mismatch):** `plot.registry` is the plot's latest registered deed (a sample Sub-Registry record for P6/P7; a deed registered through LandLock replaces it). On a Free plot, a deed buyer different from the khatian owner gives `REGISTRY_OWNER_MISMATCH` (Red; sales and mortgages blocked) and a different area gives `REGISTRY_AREA_MISMATCH` (Yellow). `POST /api/plots/:id/reconcile` (AC Land Officer) completes the missing mutation and records a signed `REGISTRY_MUTATION_DONE` event. Ledgers created before P6/P7 existed (5-plot GENESIS) still verify.
 
 ## Roles (DEMO ROLE SWITCH: not authentication)
 | Role | Allowed (checked by the API on every write) |
@@ -126,7 +127,8 @@ While verification fails, all writes are refused (423).
 | POST | /api/sale/:id/mutate | AC Land Officer | Complete mutation: owner changes, plot unlocks |
 | POST | /api/sale/:id/reject-mutation | AC Land Officer | Reject mutation (`{reason}`): plot Disputed |
 | POST | /api/sale/:id/cancel | Sub-Registrar | Cancel before registration only |
+| POST | /api/plots/:id/reconcile | AC Land Officer | Complete the mutation of the plot's unmutated Sub-Registry deed (owner becomes the deed buyer) |
 | POST | /api/mortgage/create, /api/mortgage/release | Sub-Registrar | Register / release a mortgage (release needs `loan_ref`) |
-| GET | /api/gap | any | Registered deeds waiting for mutation (including disputed) |
+| GET | /api/gap | any | Registered deeds waiting for mutation (including disputed ones and unmutated Sub-Registry deeds) |
 | GET | /api/transactions, /api/ledger, /api/ledger/verify, /api/ledger/public-key | any | Raw data, full integrity check, public key |
 | POST | /api/dev/reset, /api/dev/tamper, /api/dev/tamper-smart, /api/dev/attack | demo mode only | Reset and attack simulations (`attack` types: owner_change, bad_signature, break_link, delete_middle, truncate_tail, reorder). 404 `DEMO_DISABLED` otherwise. |

@@ -29,6 +29,7 @@ LandLock shows how a shared, plot-level lock plus a verifiable history can stop 
 | Seller is not the owner | Seller must match the recorded owner (`NOT_OWNER`); after a transfer the old owner cannot sell again. |
 | Cancel-and-resell after registration | A **registered deed cannot be cancelled**. Only the AC Land Officer can complete the mutation or **reject** it, which marks the plot **Disputed** (Red, still locked). |
 | Registered but not mutated | Flagged Yellow and listed on a "Registered but not mutated" dashboard. |
+| **Deed and khatian disagree** (registration–mutation mismatch) | Each plot's latest **Sub-Registry deed** is compared with the **khatian** (AC Land record) side by side. If the deed names a different buyer than the khatian owner (deed registered, mutation never done), the plot is **Red and sales/mortgages are blocked**: the old owner cannot sell again. A different area is a Yellow warning. Every message says it is a mismatch, not proof of fraud. The AC Land Officer can complete the missing mutation (`reconcile`), which is recorded as a signed ledger event. |
 | Selling more (or less) land than recorded | Larger area blocked (`AREA_EXCEEDS`); partial sales rejected (`PARTIAL_SALE_NOT_SUPPORTED`) because plot subdivision is not built yet. |
 | Mortgaged land | Sale of a mortgaged plot, double mortgage, mortgage during a sale and mortgage by a non-owner are blocked; release needs the matching loan number. |
 | Reused deed numbers, self-sales | `DUPLICATE_DEED`, `SAME_PARTY`. |
@@ -183,10 +184,11 @@ Remove-Item Env:NODE_ENV; Remove-Item Env:LANDLOCK_DEMO_MODE
 4. **AC Land Officer:** complete the mutation → Karim owns P1, plot unlocked. (Or reject it with a reason → **Disputed**, Red.)
 5. Click **Change P1 owner directly (demo)** → the banner turns red ("records do not match the ledger") and any new sale is refused. **Reset (demo)** restores everything.
 6. Switch to **Buyer**: everything is read-only; with "Enable blocked buttons" the server answers ⛔ Permission denied.
+7. **Deed vs khatian (P6):** the deed 1450/2019 says Monir sold to Shapla, but the khatian still shows Monir → Red. As Sub-Registrar try selling P6 as Monir → **blocked**. As **AC Land Officer** click *Complete mutation for deed 1450/2019* → owner Shapla, Green, records agree. **P7** shows an area mismatch (deed 14 vs khatian 18 decimal) as a Yellow warning.
 
 ## 8. Sample data
 
-Five synthetic plots, **P1–P5**, in mouzas named Rampura, Banasree and Uttara, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `landlock-backend/landlock-backend/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
+Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `landlock-backend/landlock-backend/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
 
 ## 9. Cryptographic integrity workflow
 
@@ -212,7 +214,7 @@ Five synthetic plots, **P1–P5**, in mouzas named Rampura, Banasree and Uttara,
 - JSON storage and a single Node process: not suitable for many users or several servers.
 - Private key in a plain file: production needs an HSM or managed key service.
 - CORS is open; there is no HTTPS or rate limiting.
-- Not built yet: plot subdivision, automatic expiry of abandoned pending sales, a dispute-resolution workflow, separate deed-registry vs khatian datasets, and integration with real government systems.
+- Not built yet: plot subdivision, automatic expiry of abandoned pending sales, a dispute-resolution workflow, importing real Sub-Registry deed records (P6/P7 use sample deed records), and integration with real government systems.
 
 ## 11. AI tools used
 

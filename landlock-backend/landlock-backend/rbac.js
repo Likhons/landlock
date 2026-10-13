@@ -36,6 +36,7 @@ const EVENT_PERMISSION = {
   SALE_BLOCKED: 'sale.initiate',
   REGISTRATION_DONE: 'sale.register',
   MUTATION_DONE: 'sale.mutate',
+  REGISTRY_MUTATION_DONE: 'sale.mutate',
   MUTATION_REJECTED: 'sale.reject_mutation',
   SALE_CANCELLED: 'sale.cancel',
   MORTGAGE_CREATED: 'mortgage.create',

@@ -11,7 +11,7 @@ const path = require('path');
 const db = require('./db');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, partialSale } = require('./rules');
+const { checkSale, checkMortgage, partialSale, registryOwnerMismatch } = require('./rules');
 const { writeJsonAtomic } = require('./fsutil');
 
 const GENESIS = '0'.repeat(64);
@@ -38,6 +38,20 @@ function stable(v) {
   return JSON.stringify(v === undefined ? null : v);
 }
 const clone = (v) => JSON.parse(JSON.stringify(v));
+
+// When LandLock registers a deed, that deed becomes the plot's latest Sub-Registry record.
+// Used by the register route and by replay, so both build exactly the same record.
+function deedRecord(tx) {
+  return { office: 'Sub-Registry Office (via LandLock)', deed_no: tx.deed_no, seller: tx.seller, buyer: tx.buyer, area: tx.deed_area, tx_id: tx.id };
+}
+
+// Ledgers created before sample plots P6/P7 were added start from P1-P5 only; they stay valid.
+const LEGACY_PLOT_IDS = ['P1', 'P2', 'P3', 'P4', 'P5'];
+function isExpectedGenesis(data) {
+  const now = genesisData();
+  if (stable(data) === stable(now)) return true;
+  return stable(data) === stable({ ...now, plots: now.plots.filter((p) => LEGACY_PLOT_IDS.includes(p.id)) });
+}
 
 function genesisData() {
   return { notice: SAMPLE_NOTICE, plots: db.seed().plots };
@@ -135,6 +149,13 @@ function replay(ledger) {
       case 'REGISTRATION_DONE':
         if (!activeTx() || tx.reg_status === 'done') return fail('no matching active, unregistered sale');
         tx.reg_status = 'done';
+        plot.registry = deedRecord(tx);
+        break;
+      case 'REGISTRY_MUTATION_DONE':
+        // AC Land completes the mutation of a deed that was registered outside LandLock
+        if (!registryOwnerMismatch(plot) || plot.mortgage) return fail('no unmutated Sub-Registry deed to reconcile');
+        if (d.deed_no !== plot.registry.deed_no || d.new_owner !== plot.registry.buyer) return fail('does not match the Sub-Registry deed');
+        plot.current_owner = plot.registry.buyer;
         break;
       case 'MUTATION_DONE':
         if (!activeTx() || tx.reg_status !== 'done') return fail('mutation without a registered deed');
@@ -241,7 +262,7 @@ function verify() {
     }
     prev = e.hash;
   }
-  if (stable(ledger[0].data) !== stable(genesisData())) {
+  if (!isExpectedGenesis(ledger[0].data)) {
     return fail('genesis', 1, 'GENESIS entry does not match the expected starting register');
   }
 
@@ -289,4 +310,4 @@ function forPlot(plot_id) {
   else checkpointProblem = 'missing';
 })();
 
-module.exports = { append, verify, forPlot, computeHash, reset };
+module.exports = { append, verify, forPlot, computeHash, reset, deedRecord };

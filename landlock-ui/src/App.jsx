@@ -22,6 +22,7 @@ const EVENT_LABEL = {
   MORTGAGE_BLOCKED: { bn: 'বন্ধক আটকানো হয়েছে', en: 'Mortgage blocked' },
   MORTGAGE_RELEASED: { bn: 'বন্ধক মুক্ত', en: 'Mortgage released' },
   GENESIS: { bn: 'শুরুর রেজিস্টার (Genesis)', en: 'Starting register (Genesis)' },
+  REGISTRY_MUTATION_DONE: { bn: 'পুরনো দলিলের নামজারি সম্পন্ন', en: 'Mutation of earlier deed done' },
 }
 const BAD_EVENTS = ['SALE_BLOCKED', 'MORTGAGE_BLOCKED', 'MUTATION_REJECTED']
 
@@ -80,6 +81,10 @@ function Icon({ name, size = 18 }) {
   )
 }
 
+// Display only: a Free plot whose latest Sub-Registry deed names another buyer than the khatian owner.
+// The server makes the actual decision (and blocks sales) with the same rule.
+const deedMismatch = (p) => Boolean(p.registry && p.status === 'Free' && p.registry.buyer !== p.current_owner)
+
 // DEMO: the chosen role is sent as a header. The server checks it on every write,
 // but a header is not authentication (anyone can send any role).
 async function post(path, body, role) {
@@ -112,6 +117,59 @@ function BlockedBox({ title, reasons, lang }) {
     <div className="alert error">
       <div className="alert-title"><Icon name="x" /> {title}</div>
       <ul>{reasons.map((r) => <li key={r.code}><Icon name="x" size={15} /> {r[lang]}</li>)}</ul>
+    </div>
+  )
+}
+
+// Sub-Registry deed (registration) side by side with the khatian (mutation record)
+function DeedVsKhatian({ plot, lang, children }) {
+  const tr = (bn, en) => (lang === 'bn' ? bn : en)
+  const r = plot.registry
+  if (!r) return null
+  const ownerOk = r.buyer === plot.current_owner
+  const areaOk = r.area === plot.area
+  const mismatch = deedMismatch(plot)
+  const mark = (good, warnOnly) => (good
+    ? <span className="cmp-ok"><Icon name="check" size={16} /></span>
+    : <span className={warnOnly ? 'cmp-warn' : 'cmp-bad'}><Icon name={warnOnly ? 'alert' : 'x'} size={16} /></span>)
+  const badge = mismatch ? <span className="badge red">{tr('মালিকের অমিল', 'Owner mismatch')}</span>
+    : !areaOk ? <span className="badge amber">{tr('পরিমাণের অমিল', 'Area mismatch')}</span>
+      : plot.status === 'Free' ? <span className="badge green">{tr('মিলেছে', 'Records agree')}</span> : null
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3><Icon name="file" /> {tr('দলিল বনাম খতিয়ান', 'Deed vs khatian')}</h3>
+        {badge}
+      </div>
+      <div className="compare">
+        <div className="cmp-h" />
+        <div className="cmp-h">{tr('সাব-রেজিস্ট্রি দলিল', 'Sub-Registry deed')}<span>{tr('নিবন্ধন', 'registration')}</span></div>
+        <div className="cmp-h">{tr('খতিয়ান', 'Khatian')}<span>{tr('এসি ল্যান্ড / নামজারি', 'AC Land / mutation')}</span></div>
+        <div className="cmp-h" />
+
+        <div className="cmp-k">{tr('মালিক', 'Owner')}</div>
+        <div className="cmp-v">{r.buyer}</div>
+        <div className="cmp-v">{plot.current_owner}</div>
+        <div className="cmp-m">{plot.status === 'Free' ? mark(ownerOk) : <span className="cmp-wait"><Icon name="clock" size={16} /></span>}</div>
+
+        <div className="cmp-k">{tr('পরিমাণ', 'Area')}</div>
+        <div className="cmp-v">{r.area} {tr('শতক', 'decimal')}</div>
+        <div className="cmp-v">{plot.area} {tr('শতক', 'decimal')}</div>
+        <div className="cmp-m">{mark(areaOk, true)}</div>
+
+        <div className="cmp-k">{tr('রেকর্ড', 'Record')}</div>
+        <div className="cmp-v small">{tr('দলিল', 'Deed')} {r.deed_no}{r.date ? ` · ${r.date}` : ''}</div>
+        <div className="cmp-v small">{tr('খতিয়ান', 'Khatian')} {plot.khatian_no} · {tr('দাগ', 'Dag')} {plot.dag_no}</div>
+        <div className="cmp-m" />
+      </div>
+      <div className="fineprint">
+        <Icon name="info" size={14} />
+        {tr(`দলিলে বিক্রেতা: ${r.seller} · ${r.office}`, `Seller in deed: ${r.seller} · ${r.office}`)}
+      </div>
+      {plot.status === 'Pending' && !ownerOk && (
+        <div className="alert info">{tr('এই দলিলের নামজারি LandLock-এ চলছে।', 'Mutation of this deed is in progress in LandLock.')}</div>
+      )}
+      {children}
     </div>
   )
 }
@@ -208,6 +266,7 @@ export default function App() {
   const [mresult, setMresult] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
   const [releaseRef, setReleaseRef] = useState('')
+  const [recResult, setRecResult] = useState(null)
   // DEMO ROLE SWITCH: always starts as the least-privileged Buyer (not saved between visits)
   const [role, setRole] = useState('buyer')
   const [roles, setRoles] = useState(null)
@@ -274,6 +333,7 @@ export default function App() {
   const selectPlot = (id) => {
     setResult(null)
     setMresult(null)
+    setRecResult(null)
     setSelectedId(id)
   }
 
@@ -307,6 +367,14 @@ export default function App() {
     }, role)
     setMresult(res)
     load(selectedId)
+  }
+
+  // AC Land completes the mutation of an earlier deed registered at the Sub-Registry office
+  const reconcile = async () => {
+    const res = await post(`/plots/${selectedId}/reconcile`, {}, role)
+    setRecResult(res.status >= 400 ? res : null)
+    const d = await load(selectedId)
+    if (d) setForm((f) => ({ ...f, seller: d.plot.current_owner }))
   }
 
   const releaseMortgage = async () => {
@@ -397,7 +465,7 @@ export default function App() {
           <span className="tag">🎭 DEMO ROLE SWITCH</span>
           <div className="role-seg">
             {Object.keys(ROLE_LABEL).map((r) => (
-              <button key={r} className={role === r ? 'on' : ''} onClick={() => { setRole(r); setResult(null); setMresult(null) }}>
+              <button key={r} className={role === r ? 'on' : ''} onClick={() => { setRole(r); setResult(null); setMresult(null); setRecResult(null) }}>
                 {roleLabel(r)}
               </button>
             ))}
@@ -495,10 +563,11 @@ export default function App() {
             <button key={p.id} className={`plot-chip${p.id === selectedId ? ' on' : ''}`} onClick={() => selectPlot(p.id)}>
               <div className="row1">
                 <span>{p.id} · {p.mouza}</span>
-                <span className={`dot ${p.status}`} title={statusText(p.status)} />
+                <span className={`dot ${deedMismatch(p) ? 'Disputed' : p.status}`} title={deedMismatch(p) ? tr('দলিল ও খতিয়ানে অমিল', 'Deed and khatian disagree') : statusText(p.status)} />
               </div>
               <div className="row2">
-                {tr('খতিয়ান', 'Khatian')} {p.khatian_no} · {tr('দাগ', 'Dag')} {p.dag_no}{p.mortgage ? ' · 🏦' : ''}
+                {tr('খতিয়ান', 'Khatian')} {p.khatian_no}<br />
+                {tr('দাগ', 'Dag')} {p.dag_no}{p.mortgage ? ' · 🏦' : ''}
               </div>
             </button>
           ))}
@@ -549,6 +618,22 @@ export default function App() {
                   </ul>
                   {data.risk.notice && <div className="fineprint"><Icon name="info" size={14} /> {data.risk.notice[lang]}</div>}
                 </div>
+
+                <DeedVsKhatian plot={data.plot} lang={lang}>
+                  {deedMismatch(data.plot) && (
+                    <>
+                      <div className="actions">
+                        <button className="btn" {...gated('sale.mutate')} onClick={reconcile}>
+                          <Icon name="check" size={16} />
+                          {tr(`দলিল ${data.plot.registry.deed_no}-এর নামজারি সম্পন্ন করুন (মালিক: ${data.plot.registry.buyer})`,
+                            `Complete mutation for deed ${data.plot.registry.deed_no} (owner: ${data.plot.registry.buyer})`)}
+                        </button>
+                      </div>
+                      {needs('sale.mutate')}
+                    </>
+                  )}
+                  {recResult && <ErrorBox body={recResult.body} lang={lang} />}
+                </DeedVsKhatian>
 
                 <SurveyTimeline plot={data.plot} lang={lang} />
               </div>
@@ -749,12 +834,13 @@ export default function App() {
                 {gap.length === 0 && <div className="empty">{tr('কোনো ঝুঁকিপূর্ণ দলিল নেই।', 'No risky deeds.')}</div>}
                 {gap.map((g) => (
                   <div key={g.id} className="gap-row">
-                    <span className={`dot ${g.state === 'disputed' ? 'Disputed' : 'Pending'}`} style={{ marginTop: 7 }} />
+                    <span className={`dot ${g.state === 'active' ? 'Pending' : 'Disputed'}`} style={{ marginTop: 7 }} />
                     <div>
                       <div><b>Plot {g.plot_id}</b>: {g.seller} → {g.buyer}</div>
                       <div className="tl-sub">
                         {tr('দলিল', 'Deed')} {g.deed_no}
                         {g.state === 'disputed' && <> · <b style={{ color: 'var(--red-tx)' }}>⛔ {tr('বিরোধপূর্ণ', 'Disputed')}</b></>}
+                        {g.source === 'sub_registry' && <> · <b style={{ color: 'var(--red-tx)' }}>{tr('সাব-রেজিস্ট্রি দলিল, নামজারি হয়নি', 'Sub-Registry deed, never mutated')}</b></>}
                       </div>
                     </div>
                     <div className="days"><b>{g.days_waiting}</b><div className="tl-sub">{tr('দিন অপেক্ষায়', 'days waiting')}</div></div>
