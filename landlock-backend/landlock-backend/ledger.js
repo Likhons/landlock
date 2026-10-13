@@ -119,7 +119,9 @@ function replay(ledger) {
 
     switch (e.event_type) {
       case 'SALE_INITIATED':
-        if (!checkSale(plot, d.seller, d.deed_area).allowed) return fail('sale was not allowed in the replayed state');
+        if (!checkSale(plot, d.seller, d.deed_area, {
+          buyer: d.buyer, deedNo: d.deed_no, usedDeedNos: [...txs.values()].map((t) => t.deed_no),
+        }).allowed) return fail('sale was not allowed in the replayed state');
         if (txs.has(d.tx_id)) return fail('duplicate transaction id');
         txs.set(d.tx_id, {
           id: d.tx_id, plot_id: plot.id, seller: d.seller, buyer: d.buyer, deed_no: d.deed_no, deed_area: d.deed_area,

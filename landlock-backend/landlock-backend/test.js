@@ -169,7 +169,7 @@ async function roleTests() {
   ok('R14. Ledger records who acted', hist.find((h) => h.event_type === 'MUTATION_DONE').data.by_role === AC
     && hist.find((h) => h.event_type === 'REGISTRATION_DONE').data.by_role === SR);
 
-  r = await post('/sale/initiate', { ...sale, seller: 'Karim', deed_no: 'D-R2' }, SR);
+  r = await post('/sale/initiate', { ...sale, seller: 'Karim', buyer: 'Salam', deed_no: 'D-R2' }, SR);
   const tx2 = r.body.transaction.id;
   ok('R15. Buyer / AC Land cannot cancel a sale (403)', denied(await post(`/sale/${tx2}/cancel`, {}, BUYER)) && denied(await post(`/sale/${tx2}/cancel`, {}, AC)));
   ok('R16. Sub-Registrar can cancel a sale', (await post(`/sale/${tx2}/cancel`, {}, SR)).status === 200);
@@ -184,6 +184,44 @@ async function roleTests() {
     && reads[1].plot.mortgage && reads[1].plot.survey.length === 4 && reads[3].valid === true);
   ok('R21. Plot API labels survey data as DEMO/SAMPLE', /DEMO\/SAMPLE/.test(reads[1].data_notice));
   ok('R22. Ledger valid after the whole role workflow', reads[3].valid === true);
+}
+
+async function validationTests() {
+  section('Input validation and clear errors');
+  await post('/dev/reset');
+  const sale = { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-V1', deed_area: 10 };
+  const ledgerLen = async () => (await get('/ledger')).length;
+  const invalid = (r, field) => r.status === 400 && r.body.code === 'VALIDATION_ERROR' && r.body.fields.includes(field) && r.body.bn && r.body.en;
+  const before = await ledgerLen();
+
+  ok('V1. Deed area "abc" rejected (400)', invalid(await post('/sale/initiate', { ...sale, deed_area: 'abc' }, SR), 'deed_area'));
+  ok('V2. Negative deed area rejected (400)', invalid(await post('/sale/initiate', { ...sale, deed_area: -5 }, SR), 'deed_area'));
+  ok('V3. Zero / empty / boolean deed area rejected', invalid(await post('/sale/initiate', { ...sale, deed_area: 0 }, SR), 'deed_area')
+    && invalid(await post('/sale/initiate', { ...sale, deed_area: '' }, SR), 'deed_area')
+    && invalid(await post('/sale/initiate', { ...sale, deed_area: true }, SR), 'deed_area'));
+  ok('V4. Missing or blank buyer rejected', invalid(await post('/sale/initiate', { ...sale, buyer: undefined }, SR), 'buyer')
+    && invalid(await post('/sale/initiate', { ...sale, buyer: '   ' }, SR), 'buyer'));
+  ok('V5. Invalid input writes nothing (plot Free, ledger unchanged)', (await ledgerLen()) === before && (await get('/plots/P1')).plot.status === 'Free');
+
+  let r = await post('/sale/initiate', { ...sale, buyer: 'Rahim' }, SR);
+  ok('V6. Buyer same as seller blocked (SAME_PARTY)', r.status === 409 && r.body.reasons.some((x) => x.code === 'SAME_PARTY'));
+
+  r = await post('/sale/initiate', { ...sale, seller: '  Rahim ', buyer: ' Karim', deed_area: '10' }, SR);
+  ok('V7. Extra spaces trimmed, numeric text area accepted', r.status === 201 && r.body.transaction.seller === 'Rahim'
+    && r.body.transaction.buyer === 'Karim' && r.body.transaction.deed_area === 10);
+
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Hasan', deed_no: ' d-v1 ', deed_area: 20 }, SR);
+  ok('V8. Same deed number on another plot blocked (DUPLICATE_DEED)', r.status === 409 && r.body.reasons.some((x) => x.code === 'DUPLICATE_DEED'));
+
+  const raw = await fetch(`${base}/sale/initiate`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Demo-Role': SR }, body: '{bad' });
+  const rawText = await raw.text();
+  ok('V9. Malformed JSON gives a clean JSON 400 (no stack trace)', raw.status === 400 && JSON.parse(rawText).code === 'INVALID_JSON' && !/\bat /.test(rawText));
+  const nf = await fetch(`${base}/no-such-endpoint`);
+  ok('V10. Unknown API route gives JSON 404', nf.status === 404 && (await nf.json()).code === 'NOT_FOUND');
+
+  ok('V11. Mortgage with blank bank rejected (400)', invalid(await post('/mortgage/create', { plot_id: 'P5', owner: 'Nasrin', bank: ' ', loan_ref: 'LN-V' }, SR), 'bank'));
+  ok('V12. Ledger valid after blocked/invalid attempts (replay uses the same rules)', (await get('/ledger/verify')).valid === true);
+  await post('/dev/reset');
 }
 
 async function integrityTests() {
@@ -302,6 +340,7 @@ async function restartTests() {
     await start();
     await storyTests();
     await roleTests();
+    await validationTests();
     await integrityTests();
     await restartTests();
   } catch (e) {

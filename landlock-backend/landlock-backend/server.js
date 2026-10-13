@@ -44,6 +44,35 @@ const guard = (perm) => (req, res, next) => {
   next();
 };
 
+// ---- Input validation (server side; never trust the form) ----
+// Names / numbers must be non-empty text after trimming spaces.
+const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+// Area must be a positive finite number (a numeric string like "10" is fine).
+const area = (v) => {
+  if (typeof v !== 'number' && typeof v !== 'string') return null;
+  if (typeof v === 'string' && !v.trim()) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+const FIELD_LABEL = {
+  seller: { bn: 'বিক্রেতা', en: 'seller' },
+  buyer: { bn: 'ক্রেতা', en: 'buyer' },
+  deed_no: { bn: 'দলিল নং', en: 'deed no.' },
+  deed_area: { bn: 'দলিলের পরিমাণ (শূন্যের বেশি সংখ্যা)', en: 'deed area (a number greater than 0)' },
+  owner: { bn: 'বন্ধকদাতা', en: 'mortgagor' },
+  bank: { bn: 'ব্যাংক', en: 'bank' },
+  loan_ref: { bn: 'ঋণ নং', en: 'loan no.' },
+};
+// Rejects bad input with 400 before any rule runs. Bad input is not written to the ledger.
+function invalid(res, fields) {
+  return res.status(400).json({
+    error: `Invalid or missing: ${fields.join(', ')}`,
+    code: 'VALIDATION_ERROR', fields,
+    bn: `তথ্য সঠিক নয় বা দেওয়া হয়নি: ${fields.map((f) => FIELD_LABEL[f].bn).join(', ')}।`,
+    en: `Invalid or missing: ${fields.map((f) => FIELD_LABEL[f].en).join(', ')}.`,
+  });
+}
+
 // ---- Read ----
 app.get('/api/plots', (req, res) => res.json(db.get().plots));
 
@@ -66,14 +95,17 @@ app.get('/api/roles', (req, res) => res.json(rbac.describe()));
 // ---- Sale workflow ----
 // 1) Initiate: run checks; if OK, lock the plot (Pending)
 app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
-  const { plot_id, seller, buyer, deed_no, deed_area } = req.body;
-  const plot = findPlot(plot_id);
+  const plot = findPlot(req.body.plot_id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
-  if (!seller || !buyer || !deed_no || !deed_area) {
-    return res.status(400).json({ error: 'plot_id, seller, buyer, deed_no, deed_area are required' });
-  }
+  const seller = text(req.body.seller);
+  const buyer = text(req.body.buyer);
+  const deed_no = text(req.body.deed_no);
+  const deed_area = area(req.body.deed_area);
+  const bad = Object.entries({ seller, buyer, deed_no, deed_area }).filter(([, v]) => v === null).map(([k]) => k);
+  if (bad.length) return invalid(res, bad);
 
-  const result = checkSale(plot, seller, deed_area);
+  const usedDeedNos = db.get().transactions.map((t) => t.deed_no);
+  const result = checkSale(plot, seller, deed_area, { buyer, deedNo: deed_no, usedDeedNos });
   if (!result.allowed) {
     ledger.append(plot.id, 'SALE_BLOCKED', { seller, buyer, deed_no, reasons: result.reasons.map((r) => r.code), by_role: req.role });
     return res.status(409).json({ blocked: true, ...result });
@@ -81,7 +113,7 @@ app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
 
   const tx = {
     id: db.get().transactions.length + 1,
-    plot_id: plot.id, seller, buyer, deed_no, deed_area: Number(deed_area),
+    plot_id: plot.id, seller, buyer, deed_no, deed_area,
     reg_status: 'pending', mutation_status: 'pending', state: 'active',
     created_at: new Date().toISOString(),
   };
@@ -135,10 +167,13 @@ app.post('/api/sale/:id/cancel', guard('sale.cancel'), (req, res) => {
 
 // ---- Bank mortgage ----
 app.post('/api/mortgage/create', guard('mortgage.create'), (req, res) => {
-  const { plot_id, owner, bank, loan_ref } = req.body;
-  const plot = findPlot(plot_id);
+  const plot = findPlot(req.body.plot_id);
   if (!plot) return res.status(404).json({ error: 'Plot not found' });
-  if (!owner || !bank || !loan_ref) return res.status(400).json({ error: 'owner, bank, loan_ref are required' });
+  const owner = text(req.body.owner);
+  const bank = text(req.body.bank);
+  const loan_ref = text(req.body.loan_ref);
+  const bad = Object.entries({ owner, bank, loan_ref }).filter(([, v]) => v === null).map(([k]) => k);
+  if (bad.length) return invalid(res, bad);
 
   const result = checkMortgage(plot, owner, bank);
   if (!result.allowed) {
@@ -236,6 +271,20 @@ app.post('/api/dev/attack', (req, res) => {
   res.json({ attack: req.body.type, ...result });
 });
 }
+
+// ---- Errors: always JSON, never a stack trace ----
+app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found', code: 'NOT_FOUND' }));
+// Express treats a middleware as an error handler only when it takes 4 arguments, so `next` stays.
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      error: 'Request body is not valid JSON', code: 'INVALID_JSON',
+      bn: 'অনুরোধের তথ্য সঠিক JSON নয়।', en: 'Request body is not valid JSON.',
+    });
+  }
+  console.error(err.message);
+  res.status(err.status || 500).json({ error: 'Internal server error', code: 'SERVER_ERROR' });
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`LandLock API running on http://localhost:${PORT}`));

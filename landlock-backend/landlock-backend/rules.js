@@ -1,8 +1,12 @@
 // Rules engine: every check returns a level (red/yellow/green) and a reason in Bangla + English.
 const RED = 'red', YELLOW = 'yellow', GREEN = 'green';
 
+// Deed numbers are compared without spaces/case, so "d-1" and " D-1 " count as the same deed.
+const normDeed = (v) => String(v).trim().toUpperCase();
+
 // Checks run when someone tries to START a sale on a plot.
-function checkSale(plot, seller, deedArea) {
+// buyer and usedDeedNos are optional so callers that only check the plot still work.
+function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } = {}) {
   const reasons = [];
 
   if (plot.status === 'Pending') {
@@ -31,6 +35,20 @@ function checkSale(plot, seller, deedArea) {
       level: RED, code: 'AREA_EXCEEDS',
       bn: `দলিলের জমির পরিমাণ (${deedArea} শতক) খতিয়ানের পরিমাণের (${plot.area} শতক) চেয়ে বেশি।`,
       en: `Deed area (${deedArea}) exceeds khatian area (${plot.area}).`,
+    });
+  }
+  if (buyer !== undefined && buyer === seller) {
+    reasons.push({
+      level: RED, code: 'SAME_PARTY',
+      bn: `ক্রেতা ও বিক্রেতা একই ব্যক্তি (${seller})। নিজের কাছে নিজের জমি বিক্রয় করা যায় না।`,
+      en: `Buyer and seller are the same person (${seller}). A plot cannot be sold to its own owner.`,
+    });
+  }
+  if (deedNo !== undefined && usedDeedNos.map(normDeed).includes(normDeed(deedNo))) {
+    reasons.push({
+      level: RED, code: 'DUPLICATE_DEED',
+      bn: `দলিল নং ${deedNo} আগেই অন্য একটি লেনদেনে ব্যবহার হয়েছে। একই দলিল নম্বর দুইবার ব্যবহার করা যায় না।`,
+      en: `Deed no. ${deedNo} is already used by another transaction. The same deed number cannot be used twice.`,
     });
   }
 
