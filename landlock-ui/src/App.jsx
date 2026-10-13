@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Logo, LogoMark } from './Logo.jsx'
 
 // Backend address: set VITE_API_URL in landlock-ui/.env (see .env.example); defaults to the local backend.
 const API = import.meta.env.VITE_API_URL || 'http://localhost:4000/api'
@@ -174,7 +175,7 @@ function Stepper({ tx, lang, rejected }) {
   const regDone = tx.reg_status === 'done'
   const steps = [
     { label: tr('বিক্রয় শুরু', 'Sale started'), state: 'done' },
-    { label: tr('দলিল নিবন্ধন', 'Deed registered'), state: regDone ? 'done' : 'current' },
+    { label: tr('দলিল নিবন্ধন', 'Deed registration'), state: regDone ? 'done' : 'current' },
     rejected
       ? { label: tr('নামজারি বাতিল', 'Mutation rejected'), state: 'rejected' }
       : { label: tr('নামজারি', 'Mutation'), state: regDone ? 'current' : '' },
@@ -351,9 +352,9 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <div className="brand-logo"><Icon name="lock" size={24} /></div>
+            <LogoMark size={50} title="LandLock" />
             <div>
-              <h1>LandLock</h1>
+              <h1>Land<span>Lock</span></h1>
               <p>{tr('এক জমি, এক মালিক। কেনার আগে জমি যাচাই করুন।', 'One Land. One Owner. Verify before you buy.')}</p>
             </div>
           </div>
@@ -366,8 +367,26 @@ export default function App() {
             )}
             <div className="seg">
               <button className={lang === 'bn' ? 'on' : ''} onClick={() => changeLang('bn')}>বাংলা</button>
-              <button className={lang === 'en' ? 'on' : ''} onClick={() => changeLang('en')}>English</button>
+              <button className={lang === 'en' ? 'on' : ''} onClick={() => changeLang('en')} aria-label="English">
+                <span className="long">English</span><span className="short">EN</span>
+              </button>
             </div>
+          </div>
+        </div>
+        {/* Short "what is this" strip for first-time viewers / judges */}
+        <div className="hero">
+          <h2>{tr('বিক্রির আগেই প্রতারণা ও দ্বৈত বিক্রয় ধরুন', 'Catch fraud and double-selling before the sale')}</h2>
+          <p>
+            {tr(
+              'প্লট লক, মালিকানা ও বন্ধক যাচাই, এবং ডিজিটাল স্বাক্ষরযুক্ত লেজার, যেখানে রেকর্ডে কারসাজি ধরা পড়ে।',
+              'Plot lock, ownership and mortgage checks, and a digitally signed ledger where tampering with records is detected.',
+            )}
+          </p>
+          <div className="hero-pills">
+            <span><Icon name="lock" size={15} /> {tr('প্লট লক', 'Plot lock')}</span>
+            <span><Icon name="x" size={15} /> {tr('দ্বৈত বিক্রয় বন্ধ', 'Double-sell blocked')}</span>
+            <span><Icon name="link" size={15} /> {tr('স্বাক্ষরিত লেজার', 'Signed ledger')}</span>
+            <span><Icon name="bank" size={15} /> {tr('বন্ধক যাচাই', 'Mortgage check')}</span>
           </div>
         </div>
       </header>
@@ -641,7 +660,7 @@ export default function App() {
                       {result.body.not_checked && (
                         <div className="sub">
                           {tr('এই প্রোটোটাইপ যা যাচাই করে না:', 'Not checked by this prototype:')}
-                          {result.body.not_checked.map((n) => <div key={n.code}>– {n[lang]}</div>)}
+                          <ul>{result.body.not_checked.map((n) => <li key={n.code}><Icon name="info" size={14} /> {n[lang]}</li>)}</ul>
                         </div>
                       )}
                     </div>
@@ -655,7 +674,7 @@ export default function App() {
                     <h3><Icon name="bank" /> {tr('ব্যাংক বন্ধক', 'Bank mortgage')}</h3>
                     {data.plot.mortgage
                       ? <span className="badge amber">{tr('বন্ধক আছে', 'Mortgaged')}</span>
-                      : <span className="badge green">{tr('কোনো বন্ধক নেই।', 'No mortgage.')}</span>}
+                      : <span className="badge green">{tr('বন্ধক নেই', 'No mortgage')}</span>}
                   </div>
                   {data.plot.mortgage && (
                     <>
@@ -746,9 +765,10 @@ export default function App() {
           </>
         )}
 
-        <div className="footer">
-          LandLock · {tr('প্রোটোটাইপ, শুধু নমুনা তথ্য। আইনগত মালিকানার নিশ্চয়তা নয়।', 'Prototype with sample data only. Not a legal guarantee of ownership.')}
-        </div>
+        <footer className="footer">
+          <Logo size={30} light={false} />
+          <div>{tr('প্রোটোটাইপ, শুধু নমুনা তথ্য। আইনগত মালিকানার নিশ্চয়তা নয়।', 'Prototype with sample data only. Not a legal guarantee of ownership.')}</div>
+        </footer>
       </main>
     </>
   )
