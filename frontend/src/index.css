@@ -663,7 +663,9 @@ b, strong { font-weight: 600; }
 .scroll::-webkit-scrollbar { width: 8px; }
 .scroll::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 8px; }
 
-.ct { display: flex; align-items: center; gap: var(--s3); min-width: 0; flex: 1; }
+/* the title keeps at least ~16em; if a badge doesn't fit beside it, the badge moves to the next line */
+.ct { display: flex; align-items: center; gap: var(--s3); min-width: 0; flex: 1 1 16em; }
+.card-head > .badge { max-width: 100%; white-space: normal; }
 .ct-ico {
   width: 48px; height: 48px; border-radius: 50%; flex: none; display: grid; place-items: center;
   background: linear-gradient(160deg, #0d6b4f, var(--green-900)); color: #fff; box-shadow: 0 4px 10px rgba(1, 61, 46, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15);
