@@ -18,7 +18,7 @@ const GENESIS = '0'.repeat(64);
 const SAMPLE_NOTICE = 'DEMO/SAMPLE DATA - not verified official khatian records';
 
 // Keep the checkpoint away from data.json. Point this at another disk/machine in real use.
-const CP_DIR = process.env.LANDLOCK_TRUST_DIR || path.join(__dirname, 'trusted');
+const CP_DIR = process.env.LANDLOCK_TRUST_DIR || path.join(__dirname, '..', 'data', 'trusted');
 const CP_FILE = path.join(CP_DIR, 'checkpoint.json');
 
 function computeHash(prev_hash, entry) {

@@ -1,6 +1,6 @@
 # LandLock backend (Node.js + Express)
 
-Technical reference for the LandLock API. For the project overview, setup and demo guide see the [root README](../../README.md).
+Technical reference for the LandLock API. For the project overview, setup and demo guide see the [root README](../README.md).
 
 > **DEMO / SAMPLE DATA.** All plots, owners, khatian/dag numbers, loans and CS → SA → RS → BS survey history are invented for this prototype. They are not official land records, and this is not a legal verification system.
 
@@ -23,24 +23,25 @@ Copy `.env.example` to `.env` (git-ignored) to change settings; shell variables 
 | `PORT` | `4000` | API port |
 | `NODE_ENV` | (unset) | `production` disables demo endpoints and automatic key generation |
 | `LANDLOCK_DEMO_MODE` | off | Exactly `true` enables `/api/dev/*` (or use `npm run demo`). Ignored when `NODE_ENV=production`. |
-| `LANDLOCK_DATA_DIR` | this folder | Folder holding `data.json` |
-| `LANDLOCK_TRUST_DIR` | `./trusted` | Folder for the signed ledger checkpoint |
-| `LANDLOCK_KEY_FILE` | `./keys.json` | Ed25519 key file |
+| `LANDLOCK_DATA_DIR` | `data/` | Folder holding `data.json` (created automatically when the default is used) |
+| `LANDLOCK_TRUST_DIR` | `data/trusted/` | Folder for the signed ledger checkpoint |
+| `LANDLOCK_KEY_FILE` | `data/keys.json` | Ed25519 key file |
 | `LANDLOCK_REQUIRE_KEY` | off | `true` = never generate a key automatically |
 | `LANDLOCK_EXTRA_GRANTS` | empty | Extra role permissions, e.g. `sub_registrar:sale.mutate` |
 
 ## Files
 | File | Role |
 |---|---|
-| `server.js` | Routes, input validation, role + integrity guard, rollback on failure, demo guard |
-| `rules.js` | Sale / mortgage / survey rules and the explainable Green / Yellow / Red result |
-| `ledger.js` | Hash-chained, signed ledger; checkpoint; full verification by replay |
-| `keys.js` | Loads and validates the Ed25519 key (generates one only for a brand-new database) |
-| `db.js` | JSON storage: sample data (`seed()`), atomic saves, snapshot / restore |
-| `fsutil.js` | Atomic file replace and the data-folder lock |
-| `config.js` | Environment settings with safe defaults |
-| `rbac.js` | Demo roles and permissions |
-| `test.js` | Automated tests |
+| `src/server.js` | Routes, input validation, role + integrity guard, rollback on failure, demo guard |
+| `src/rules.js` | Sale / mortgage / survey rules and the explainable Green / Yellow / Red result |
+| `src/ledger.js` | Hash-chained, signed ledger; checkpoint; full verification by replay |
+| `src/keys.js` | Loads and validates the Ed25519 key (generates one only for a brand-new database) |
+| `src/db.js` | JSON storage: sample data (`seed()`), atomic saves, snapshot / restore |
+| `src/fsutil.js` | Atomic file replace and the data-folder lock |
+| `src/config.js` | Environment settings with safe defaults |
+| `src/rbac.js` | Demo roles and permissions |
+| `test/test.js` | Automated tests |
+| `data/` | Runtime files, git-ignored: `data.json`, `keys.json`, `trusted/checkpoint.json`, lock file. Back up as one unit. |
 
 ## Input validation
 Every write request is validated on the server before any rule runs. Invalid input is rejected with **400 VALIDATION_ERROR** (listing the bad `fields`, with Bangla and English text) and changes nothing.

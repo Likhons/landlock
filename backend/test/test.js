@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const SERVER = path.join(__dirname, '..', 'src', 'server.js');
 const PORT = process.env.TEST_PORT || 4100;
 const base = `http://localhost:${PORT}/api`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'landlock-test-'));
@@ -40,7 +41,7 @@ const section = (t) => console.log(`\n---- ${t} ----`);
 let server;
 let serverLog = ''; // everything the test servers print, checked for leaked secrets/paths
 async function start(extraEnv = {}, args = []) {
-  server = spawn(process.execPath, [path.join(__dirname, 'server.js'), ...args], {
+  server = spawn(process.execPath, [SERVER, ...args], {
     env: { ...process.env, PORT, ...ENV, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.on('data', (c) => { serverLog += c; });
@@ -406,7 +407,7 @@ async function fullPlotTests() {
 // Starts the server expecting it to refuse; returns its exit code and error output.
 function startExpectFail(extraEnv = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], { env: { ...process.env, PORT, ...ENV, ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(process.execPath, [SERVER], { env: { ...process.env, PORT, ...ENV, ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', (c) => { stderr += c; serverLog += c; });
     const timer = setTimeout(() => { child.kill(); resolve({ code: 'still running', stderr }); }, 10000);

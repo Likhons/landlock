@@ -1,4 +1,4 @@
-// Sub-Registrar's signing key (Ed25519), kept in keys.json (or the file named by LANDLOCK_KEY_FILE).
+// Sub-Registrar's signing key (Ed25519), kept in backend/data/keys.json (or the file named by LANDLOCK_KEY_FILE).
 // In real use the private key would sit in a hardware module (HSM) or managed key service at the registry office.
 // PROTOTYPE RISK: keys.json holds the PRIVATE key in plain text. It is git-ignored and must never be
 // sent to the frontend, returned by the API or logged. Only sign/verify/publicKey are exported.
@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { requireKey, fatal } = require('./config');
 
-const FILE = process.env.LANDLOCK_KEY_FILE || path.join(__dirname, 'keys.json');
+const FILE = process.env.LANDLOCK_KEY_FILE || path.join(__dirname, '..', 'data', 'keys.json');
 const NAME = path.basename(FILE);
 const SIGNER = 'Sub-Registry Office (demo key)';
 let keys = null;

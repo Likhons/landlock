@@ -74,15 +74,19 @@ flowchart LR
 
 ```
 LandLock/
-├── README.md                     ← this file
-├── landlock-backend/landlock-backend/
-│   ├── server.js  rules.js  ledger.js  keys.js  db.js  rbac.js  config.js  fsutil.js
-│   ├── test.js                   ← automated tests
-│   ├── .env.example              ← settings template (placeholders only)
-│   └── README.md                 ← API and technical reference
-└── landlock-ui/
-    ├── src/App.jsx               ← the interface
+├── README.md                ← this file
+├── backend/                 ← Node.js + Express API
+│   ├── src/                 ← server.js, rules.js, ledger.js, keys.js, db.js, rbac.js, config.js, fsutil.js
+│   ├── test/test.js         ← automated tests
+│   ├── data/                ← created on first start, git-ignored: data.json, keys.json, trusted/
+│   ├── .env.example         ← settings template (placeholders only)
+│   ├── package.json
+│   └── README.md            ← API and technical reference
+└── frontend/                ← React + Vite UI
+    ├── src/                 ← App.jsx, PlotMap.jsx (mouza map), Logo.jsx, index.css
+    ├── public/              ← favicon
     ├── .env.example
+    ├── package.json
     └── README.md
 ```
 
@@ -94,7 +98,7 @@ Open **PowerShell** in the project folder.
 
 **Terminal 1: backend**
 ```powershell
-cd landlock-backend\landlock-backend
+cd backend
 npm install
 npm run demo        # API on http://localhost:4000 with demo tools enabled
 ```
@@ -102,7 +106,7 @@ Use `npm start` instead to run **without** the demo tools (the safe default).
 
 **Terminal 2: frontend**
 ```powershell
-cd landlock-ui
+cd frontend
 npm install
 npm run dev         # open http://localhost:5173
 ```
@@ -115,15 +119,15 @@ npm run dev         # open http://localhost:5173
 
 There is no proxy: the UI calls the API directly. To point the UI at another address, set `VITE_API_URL` (see below).
 
-On the very first start the backend creates `data.json` from the sample data and generates a signing key (`keys.json`). Both are git-ignored.
+On the very first start the backend creates `backend/data/` with `data.json` (from the sample data), a signing key (`keys.json`) and the ledger checkpoint (`trusted/`). The whole `data/` folder is git-ignored. **Back it up as one unit**: the key must stay with the data it signed.
 
 ## 5. Configuration
 
 Both parts work without any configuration. To change settings, copy the examples (they contain placeholders only):
 
 ```powershell
-Copy-Item landlock-backend\landlock-backend\.env.example landlock-backend\landlock-backend\.env
-Copy-Item landlock-ui\.env.example landlock-ui\.env
+Copy-Item backend\.env.example backend\.env
+Copy-Item frontend\.env.example frontend\.env
 ```
 
 | Variable (backend `.env`) | Default | Purpose |
@@ -131,7 +135,7 @@ Copy-Item landlock-ui\.env.example landlock-ui\.env
 | `PORT` | 4000 | API port |
 | `NODE_ENV` | unset | `production` disables demo tools and automatic key generation |
 | `LANDLOCK_DEMO_MODE` | off | exactly `true` enables the demo endpoints |
-| `LANDLOCK_DATA_DIR`, `LANDLOCK_TRUST_DIR`, `LANDLOCK_KEY_FILE` | project folder | where data, checkpoint and key live |
+| `LANDLOCK_DATA_DIR`, `LANDLOCK_TRUST_DIR`, `LANDLOCK_KEY_FILE` | `backend/data/` | where data, checkpoint and key live |
 | `LANDLOCK_REQUIRE_KEY` | off | `true` = never auto-generate a signing key |
 | `LANDLOCK_EXTRA_GRANTS` | empty | extra role permissions (server-side only) |
 
@@ -139,19 +143,19 @@ Copy-Item landlock-ui\.env.example landlock-ui\.env
 |---|---|---|
 | `VITE_API_URL` | `http://localhost:4000/api` | backend address |
 
-`.env`, `.env.*` (except `.env.example`), `keys.json`, `*.pem`, `*.key`, `data.json`, `trusted/`, lock and temp files are all git-ignored.
+`.env`, `.env.*` (except `.env.example`), `backend/data/` (data, key, checkpoint), `keys.json`, `*.pem`, `*.key`, lock and temp files are all git-ignored.
 
 ## 6. Running the tests
 
 ```powershell
-cd landlock-backend\landlock-backend
+cd backend
 npm test
 ```
 The suite starts its **own** servers on ports 4100/4101 with temporary data, key and checkpoint files and deletes them afterwards, so your `data.json` and `keys.json` are never touched and the main server can keep running. It covers the full sale/mortgage/survey story, roles, input validation, disputes, full-plot rule, wording, concurrency, ledger tampering, restarts, demo-mode guard, signing-key handling and failed-write rollback. The last line says `All tests passed` or how many failed. One `INFO` line documents a known limitation (see §10).
 
 Frontend checks:
 ```powershell
-cd landlock-ui
+cd frontend
 npm run lint
 npm run build
 ```
@@ -233,10 +237,10 @@ Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, M
 | `npm` "cannot be loaded because running scripts is disabled" | Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use `npm.cmd` instead of `npm`. |
 | `process.loadEnvFile is not a function` | Node.js is too old; install 20.12 or newer (`node --version`). |
 | `EADDRINUSE: address already in use :::4000` | Another program uses port 4000. Find it with `Get-NetTCPConnection -LocalPort 4000` and stop it, or set `PORT` in `.env`. |
-| "another LandLock server (PID …) is already using this data folder" | Stop the other backend window. If none is running, delete `data.json.lock`. |
-| "signing key file keys.json is missing, but signed ledger data already exists" | Restore your original `keys.json`. To start completely fresh instead, move `data.json` and the `trusted` folder somewhere else and start again. |
+| "another LandLock server (PID …) is already using this data folder" | Stop the other backend window. If none is running, delete `backend\data\data.json.lock`. |
+| "signing key file keys.json is missing, but signed ledger data already exists" | Restore your original `backend\data\keys.json`. To start completely fresh instead, move the whole `backend\data` folder somewhere else and start again. |
 | "data.json is not valid JSON" | Restore it from a backup, or move it aside to start again from the sample data. |
-| Red banner "Ledger check failed" / writes return 423 | Expected after using a demo attack. Click **Reset (demo)** (demo mode), or stop the server and move `data.json` and `trusted` aside. |
+| Red banner "Ledger check failed" / writes return 423 | Expected after using a demo attack. Click **Reset (demo)** (demo mode), or stop the server and move the `backend\data` folder aside. |
 | Demo buttons are missing | The backend is running without demo mode; restart it with `npm run demo`. |
 | A button is greyed out / "Permission denied" | Choose the right role in the DEMO ROLE SWITCH (e.g. AC Land Officer for mutation). |
 | Port 4100 busy when running tests | Stop whatever uses it, or run `$env:TEST_PORT=4200; npm test`. |

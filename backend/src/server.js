@@ -1,7 +1,7 @@
 // Optional local settings: backend/.env (see .env.example). Variables already set in the shell win.
 const fs = require('fs');
 const path = require('path');
-const ENV_FILE = path.join(__dirname, '.env');
+const ENV_FILE = path.join(__dirname, '..', '.env');
 if (fs.existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 const express = require('express');

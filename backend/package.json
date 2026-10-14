@@ -2,13 +2,13 @@
   "name": "landlock-backend",
   "version": "1.0.0",
   "description": "LandLock - plot lock, double-sell block and tamper-evident ledger (Round 1 prototype)",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "demo": "node server.js --demo",
-    "dev:demo": "node --watch server.js --demo",
-    "test": "node test.js"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "demo": "node src/server.js --demo",
+    "dev:demo": "node --watch src/server.js --demo",
+    "test": "node test/test.js"
   },
   "engines": {
     "node": ">=20.12"

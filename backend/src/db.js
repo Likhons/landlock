@@ -6,7 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { fatal } = require('./config');
 const { writeJsonAtomic, acquireLock } = require('./fsutil');
-const DIR = process.env.LANDLOCK_DATA_DIR || __dirname;
+// Default: backend/data/ (git-ignored). Created on first start; a custom LANDLOCK_DATA_DIR must already exist.
+const DIR = process.env.LANDLOCK_DATA_DIR || path.join(__dirname, '..', 'data');
+if (!process.env.LANDLOCK_DATA_DIR) fs.mkdirSync(DIR, { recursive: true });
 const FILE = path.join(DIR, 'data.json');
 
 function seed() {
