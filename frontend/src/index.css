@@ -198,6 +198,7 @@ b, strong { font-weight: 600; }
   .app > .topbar .topbar-inner { padding-left: 12px; }
   .menu-btn { margin-left: 0; }
   .app.nav-mini .menu-btn { margin-left: 4px; }
+  .app.nav-mini .topbar .brand { margin-left: 4px; } /* keeps the divider on the sidebar's edge (76px) */
   .app > .topbar .brand { align-self: stretch; padding-left: 20px; margin-left: 8px; border-left: 1px solid rgba(255, 255, 255, 0.12); }
   /* The sidebar is fixed and the page sits beside it with a margin. Collapsing/expanding animates
      only the sidebar's own width (a small subtree); the page margin changes in one step and App
