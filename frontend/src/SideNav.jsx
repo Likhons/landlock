@@ -1,4 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { drawer, useDrawerOpen } from './navStore.js'
+
+// same breakpoint as the drawer CSS in index.css
+const DRAWER_MQ = window.matchMedia('(max-width: 1199px)')
+const subscribeDrawerMode = (fn) => { DRAWER_MQ.addEventListener('change', fn); return () => DRAWER_MQ.removeEventListener('change', fn) }
 
 // Left sidebar: links to the sections of this one page (no separate pages exist), with the
 // section currently on screen highlighted. On wide screens it can shrink to icons only;
@@ -37,22 +42,63 @@ function Landscape() {
   )
 }
 
-export default function SideNav({ lang, active, mini, open, onNavigate, onClose, Icon, Logo }) {
+export default function SideNav({ lang, mini, Icon, Logo }) {
   const tr = (bn, en) => (lang === 'bn' ? bn : en)
+  // drawer state comes from navStore, so opening it re-renders only this component
+  const open = useDrawerOpen()
+  const onClose = () => drawer.set(false)
+  const onNavigate = onClose
+  // below 1200px the sidebar is a drawer; when closed it sits painted just off screen, so it is made
+  // inert (no focus, no screen reader) until opened. Wide screens dock it and it is always usable.
+  const isDrawer = useSyncExternalStore(subscribeDrawerMode, () => DRAWER_MQ.matches)
+  // the section currently on screen; tracked here so scrolling re-renders only the sidebar
+  const [active, setActive] = useState('top')
+  useEffect(() => {
+    let raf = 0
+    const spy = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        if (window.scrollY < 40) { setActive('top'); return }
+        // at the very bottom the last sections can never reach the top, so any visible one counts
+        const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4
+        let cur = 'top'
+        for (const it of ITEMS) {
+          const el = document.getElementById(it.id)
+          if (el && el.getBoundingClientRect().top < window.innerHeight * (atEnd ? 0.9 : 0.35)) cur = it.id
+        }
+        setActive(cur)
+      })
+    }
+    spy()
+    window.addEventListener('scroll', spy, { passive: true })
+    return () => { window.removeEventListener('scroll', spy); cancelAnimationFrame(raf) }
+  }, [])
   const asideRef = useRef(null)
   const backRef = useRef(null)
   const closeRef = useRef(null)
   const swipe = useRef(null) // { x, y, dx, horizontal }
 
-  // drawer open: lock the page behind it, move focus inside; on close, give focus back
+  // drawer open: Escape closes it, and so does the screen becoming wide (e.g. a tablet turned
+  // sideways: the sidebar is docked then). Focus moves inside once the slide has finished, and
+  // goes back on close. The page behind is NOT locked with body overflow: that restyles the whole
+  // document right as the slide starts. The backdrop blocks touch and wheel scrolling instead.
   useEffect(() => {
     if (!open) return undefined
     const before = document.activeElement
-    const { overflow } = document.body.style
-    document.body.style.overflow = 'hidden'
-    if (closeRef.current) closeRef.current.focus({ preventScroll: true })
+    const onKey = (e) => { if (e.key === 'Escape') drawer.set(false) }
+    const wide = window.matchMedia('(min-width: 1200px)')
+    const onWide = () => { if (wide.matches) drawer.set(false) }
+    const stopWheel = (e) => e.preventDefault()
+    const back = backRef.current
+    const focusLater = setTimeout(() => closeRef.current && closeRef.current.focus({ preventScroll: true }), 320)
+    window.addEventListener('keydown', onKey)
+    wide.addEventListener('change', onWide)
+    if (back) back.addEventListener('wheel', stopWheel, { passive: false })
     return () => {
-      document.body.style.overflow = overflow
+      clearTimeout(focusLater)
+      window.removeEventListener('keydown', onKey)
+      wide.removeEventListener('change', onWide)
+      if (back) back.removeEventListener('wheel', stopWheel)
       if (before && before.focus) before.focus({ preventScroll: true })
     }
   }, [open])
@@ -93,6 +139,7 @@ export default function SideNav({ lang, active, mini, open, onNavigate, onClose,
       ref={asideRef}
       className={`sidenav${mini ? ' mini' : ''}${open ? ' open' : ''}`}
       aria-label={tr('পাতার অংশ', 'Page sections')}
+      inert={(isDrawer && !open) || undefined}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
@@ -107,8 +154,8 @@ export default function SideNav({ lang, active, mini, open, onNavigate, onClose,
       </div>
       <nav>
         <ul>
-          {ITEMS.map((it, i) => (
-            <li key={it.id} style={{ '--i': i }}>
+          {ITEMS.map((it) => (
+            <li key={it.id}>
               <a
                 href={`#${it.id}`}
                 className={active === it.id ? 'on' : ''}

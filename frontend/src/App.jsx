@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Logo, LogoMark } from './Logo.jsx'
 import PlotMap from './PlotMap.jsx'
 import SideNav from './SideNav.jsx'
+import PlotSwitcher from './PlotSwitcher.jsx'
+import { drawer, useDrawerOpen } from './navStore.js'
 import LedgerChain, { LedgerChecks, LedgerSeal } from './LedgerChain.jsx'
 
 // Backend address: set VITE_API_URL in frontend/.env (see .env.example); defaults to the local backend.
@@ -26,8 +28,12 @@ const EVENT_LABEL = {
   MORTGAGE_RELEASED: { bn: 'বন্ধক মুক্ত', en: 'Mortgage released' },
   GENESIS: { bn: 'শুরুর রেজিস্টার (Genesis)', en: 'Starting register (Genesis)' },
   REGISTRY_MUTATION_DONE: { bn: 'পুরনো দলিলের নামজারি সম্পন্ন', en: 'Mutation of earlier deed done' },
+  AGREEMENT_CREATED: { bn: 'বায়নাপত্র নিবন্ধিত', en: 'Sale agreement registered' },
+  AGREEMENT_BLOCKED: { bn: 'বায়নাপত্র আটকানো হয়েছে', en: 'Sale agreement blocked' },
+  AGREEMENT_CANCELLED: { bn: 'বায়নাপত্র বাতিল', en: 'Sale agreement cancelled' },
 }
-const BAD_EVENTS = ['SALE_BLOCKED', 'MORTGAGE_BLOCKED', 'MUTATION_REJECTED']
+const BAD_EVENTS = ['SALE_BLOCKED', 'MORTGAGE_BLOCKED', 'MUTATION_REJECTED', 'AGREEMENT_BLOCKED']
+const taka = (n) => `৳${Number(n).toLocaleString('en-IN')}`
 
 // Fallback labels until /api/roles loads. Permissions always come from the server.
 const ROLE_LABEL = {
@@ -38,9 +44,9 @@ const ROLE_LABEL = {
 
 // What each demo role may do (mirrors backend rbac.js; the server is what actually enforces it)
 const ROLE_INFO = {
-  buyer: { icon: 'user', bn: 'শুধু দেখা: রেকর্ড, ঝুঁকি, লেজার', en: 'View only: records, risk, ledger' },
-  sub_registrar: { icon: 'file', bn: 'বিক্রয় শুরু, দলিল নিবন্ধন, বন্ধক', en: 'Start sales, register deeds, mortgages' },
-  ac_land: { icon: 'pin', bn: 'নামজারি সম্পন্ন বা বাতিল', en: 'Complete or reject mutation (namjari)' },
+  buyer: { icon: 'buyer', bn: 'শুধু দেখা: রেকর্ড, ঝুঁকি, লেজার', en: 'View only: records, risk, ledger' },
+  sub_registrar: { icon: 'deed', bn: 'বিক্রয়, দলিল নিবন্ধন, বায়নাপত্র, বন্ধক', en: 'Sales, deeds, sale agreements, mortgages' },
+  ac_land: { icon: 'landpin', bn: 'নামজারি সম্পন্ন বা বাতিল', en: 'Complete or reject mutation (namjari)' },
 }
 
 const SAMPLE_BADGE = {
@@ -83,6 +89,10 @@ const ICONS = {
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   map: <><path d="M9 3 3 6v15l6-3 6 3 6-3V3l-6 3z" /><path d="M9 3v15M15 6v15" /></>,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  // role icons: a person with a document (buyer), a deed with a seal (Sub-Registrar), a pin over land layers (AC Land)
+  buyer: <><circle cx="9" cy="7.5" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 10-5.5" /><rect x="14" y="11" width="7.5" height="10" rx="1.2" /><path d="M16.2 14.5h3.2M16.2 17.5h3.2" /></>,
+  deed: <><path d="M13 21H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8l5 5v4" /><path d="M14 2v5h5M8 9h5M8 13h4" /><circle cx="17.5" cy="15.5" r="2.8" /><path d="m16 18-.8 4 2.3-1.3 2.3 1.3-.8-4" /></>,
+  landpin: <><path d="M12 12.5s-4-3.6-4-6.5a4 4 0 0 1 8 0c0 2.9-4 6.5-4 6.5z" /><circle cx="12" cy="6" r="1.4" /><path d="M8.5 11.5 3 14l9 4.5 9-4.5-5.5-2.5" /><path d="m3 17.5 9 4.5 9-4.5" /></>,
   scroll: <><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4" /><path d="M19 17V5a2 2 0 0 0-2-2H4" /></>,
 }
 function Icon({ name, size = 18 }) {
@@ -91,6 +101,16 @@ function Icon({ name, size = 18 }) {
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {ICONS[name]}
     </svg>
+  )
+}
+
+// Menu button: its own component, so only it (not the page) re-renders when the drawer opens/closes
+function MenuButton({ onClick, label }) {
+  const open = useDrawerOpen()
+  return (
+    <button type="button" className="menu-btn" onClick={onClick} aria-label={label} aria-expanded={open || undefined}>
+      <Icon name="menu" size={22} />
+    </button>
   )
 }
 
@@ -366,61 +386,26 @@ export default function App() {
   const [rejectReason, setRejectReason] = useState('')
   const [releaseRef, setReleaseRef] = useState('')
   const [recResult, setRecResult] = useState(null)
+  const [aform, setAform] = useState({ buyer: '', agreement_no: '', advance: '' })
+  const [aresult, setAresult] = useState(null)
+  const [acancel, setAcancel] = useState({ agreement_no: '', reason: '' })
   // DEMO ROLE SWITCH: always starts as the least-privileged Buyer (not saved between visits)
   const [role, setRole] = useState('buyer')
   const [roles, setRoles] = useState(null)
   const [showBlocked, setShowBlocked] = useState(false)
   const [demoMode, setDemoMode] = useState(false)
-  // UI only: a compact bar with the selected plot appears once the map has scrolled out of view
+  // UI only: the floating plot switcher watches this map and appears once it has scrolled out of view
   const mapRef = useRef(null)
-  const [showBar, setShowBar] = useState(false)
-  // UI only: sidebar (icons-only on wide screens, a drawer on small ones) and the section on screen
+  // UI only: sidebar (icons-only on wide screens, a drawer on small ones). SideNav tracks the section
+  // on screen itself, so scrolling re-renders only the sidebar, never this whole page.
   const [navMini, setNavMini] = useState(() => { try { return localStorage.getItem('landlock.navMini') === '1' } catch { return false } })
-  const [navOpen, setNavOpen] = useState(false)
-  const [section, setSection] = useState('top')
+  // wide screens: icons-only sidebar (changes the page layout, so it is App state);
+  // smaller screens: the drawer, whose open state lives in navStore so the page does not re-render
   const toggleNav = () => {
     if (window.matchMedia('(min-width: 1200px)').matches) {
       setNavMini((m) => { try { localStorage.setItem('landlock.navMini', m ? '0' : '1') } catch { /* private mode */ } return !m })
-    } else setNavOpen((o) => !o)
+    } else drawer.toggle()
   }
-  useEffect(() => {
-    if (!navOpen) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false) }
-    // the screen became wide (e.g. a tablet turned sideways): the sidebar is docked now, no drawer
-    const wide = window.matchMedia('(min-width: 1200px)')
-    const onWide = () => { if (wide.matches) setNavOpen(false) }
-    window.addEventListener('keydown', onKey)
-    wide.addEventListener('change', onWide)
-    return () => { window.removeEventListener('keydown', onKey); wide.removeEventListener('change', onWide) }
-  }, [navOpen])
-  useEffect(() => {
-    const ids = ['top', 'map', 'ledger', 'record', 'survey', 'gap']
-    let raf = 0
-    const spy = () => {
-      cancelAnimationFrame(raf)
-      raf = requestAnimationFrame(() => {
-        if (window.scrollY < 40) { setSection('top'); return }
-        // at the very bottom the last sections can never reach the top, so any visible one counts
-        const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4
-        let cur = 'top'
-        for (const id of ids) {
-          const el = document.getElementById(id)
-          if (el && el.getBoundingClientRect().top < window.innerHeight * (atEnd ? 0.9 : 0.35)) cur = id
-        }
-        setSection(cur)
-      })
-    }
-    spy()
-    window.addEventListener('scroll', spy, { passive: true })
-    return () => { window.removeEventListener('scroll', spy); cancelAnimationFrame(raf) }
-  }, [])
-  useEffect(() => {
-    const el = mapRef.current
-    if (!el || !('IntersectionObserver' in window)) return undefined
-    const io = new IntersectionObserver(([e]) => setShowBar(!e.isIntersecting && e.boundingClientRect.top < 0))
-    io.observe(el)
-    return () => io.disconnect()
-  }, [])
 
   const tr = (bn, en) => (lang === 'bn' ? bn : en)
   const roleLabel = (r) => ((roles && roles.roles[r]) || ROLE_LABEL[r])[lang]
@@ -485,6 +470,7 @@ export default function App() {
     setResult(null)
     setMresult(null)
     setRecResult(null)
+    setAresult(null)
     setSelectedId(id)
   }
 
@@ -545,10 +531,26 @@ export default function App() {
     load(selectedId)
   }
 
+  // Sale agreement (bainapatra): the seller is always the recorded owner shown on the page
+  const submitAgreement = async () => {
+    const res = await post('/agreement/create', { plot_id: selectedId, seller: data.plot.current_owner, ...aform }, role)
+    setAresult(res)
+    if (res.status === 201) setAform({ buyer: '', agreement_no: '', advance: '' })
+    load(selectedId)
+  }
+
+  const cancelAgreement = async () => {
+    const res = await post('/agreement/cancel', { plot_id: selectedId, ...acancel }, role)
+    setAresult(res.status >= 400 ? res : null)
+    if (res.status < 400) setAcancel({ agreement_no: '', reason: '' })
+    load(selectedId)
+  }
+
   const reset = async () => {
     await post('/dev/reset')
     setResult(null)
     setMresult(null)
+    setAresult(null)
     const d = await load(selectedId)
     if (d) setForm({ seller: d.plot.current_owner, buyer: '', deed_no: '', deed_area: String(d.plot.area) })
   }
@@ -597,15 +599,7 @@ export default function App() {
     <div className={`app${navMini ? ' nav-mini' : ''}`}>
       <header className="topbar">
         <div className="topbar-inner">
-          <button
-            type="button"
-            className="menu-btn"
-            onClick={toggleNav}
-            aria-label={tr('মেনু', 'Menu')}
-            aria-expanded={navOpen || undefined}
-          >
-            <Icon name="menu" size={22} />
-          </button>
+          <MenuButton onClick={toggleNav} label={tr('মেনু', 'Menu')} />
           <div className="brand">
             <LogoMark size={40} title="LandLock" />
             <span className="brand-text">
@@ -635,28 +629,22 @@ export default function App() {
         </div>
       </header>
 
-      {showBar && data && (
-        <div className="plotbar" role="region" aria-label={tr('নির্বাচিত জমি', 'Selected plot')}>
-          <div className="plotbar-inner">
-            <span className={`pb-dot ${data.risk.level}`} aria-hidden="true" />
-            <span className="pb-title">{tr('দাগ', 'Dag')} {data.plot.dag_no}</span>
-            <span className="pb-meta">{tr(`মৌজা ${data.plot.mouza}, মালিক ${data.plot.current_owner}`, `${data.plot.mouza} mouza, owner ${data.plot.current_owner}`)}</span>
-            <span className={`badge ${data.risk.level === 'green' ? 'green' : data.risk.level === 'yellow' ? 'amber' : 'red'}`}>
-              {data.risk.level === 'green' ? tr('সতর্কতা নেই', 'No warnings') : data.risk.level === 'yellow' ? tr('সতর্কতা', 'Caution') : tr('ঝুঁকিপূর্ণ', 'High risk')}
-            </span>
-            <div className="pb-plots">
-              {plots.map((p) => (
-                <button key={p.id} className={`pb-plot st-${mapStatus(p)}${p.id === selectedId ? ' on' : ''}`} aria-pressed={p.id === selectedId} onClick={() => selectPlot(p.id)}>
-                  {p.id}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+      {data && (
+        <PlotSwitcher
+          watchRef={mapRef}
+          plots={plots}
+          selectedId={selectedId}
+          onSelect={selectPlot}
+          onMap={() => mapRef.current && mapRef.current.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })}
+          risk={data.risk.level}
+          statusOf={mapStatus}
+          lang={lang}
+          Icon={Icon}
+        />
       )}
 
       <div className="shell">
-      <SideNav lang={lang} active={section} mini={navMini} open={navOpen} onNavigate={() => setNavOpen(false)} onClose={() => setNavOpen(false)} Icon={Icon} Logo={LogoMark} />
+      <SideNav lang={lang} mini={navMini} Icon={Icon} Logo={LogoMark} />
       <main className="page">
         <section className="hero" id="top">
           <div className="hero-copy">
@@ -682,8 +670,9 @@ export default function App() {
             {/* DEMO ROLE SWITCH: not a login. The server enforces permissions on every write. */}
             <div className="role-panel">
               <div className="role-head">
-                <span className="role-title">🎭 {tr('ডেমো রোল সুইচ', 'Demo role switch')}</span>
-                <span className="role-sub">{tr('কোন অফিসের ভূমিকায় কাজ করবেন?', 'Which office do you want to act as?')}</span>
+                <LogoMark size={44} />
+                <span className="role-title">{tr('ডেমো রোল সুইচ', 'Demo role switch')}</span>
+                <span className="role-sub">{tr('কোন অফিসের ভূমিকায় দেখবেন?', 'Choose an office to preview')}</span>
               </div>
               <div className="roles" role="radiogroup" aria-label={tr('ডেমো রোল', 'Demo role')}>
                 {Object.keys(ROLE_LABEL).map((r) => (
@@ -693,14 +682,15 @@ export default function App() {
                     role="radio"
                     aria-checked={role === r}
                     className={`role-card r-${r}${role === r ? ' on' : ''}`}
-                    onClick={() => { setRole(r); setResult(null); setMresult(null); setRecResult(null) }}
+                    onClick={() => { setRole(r); setResult(null); setMresult(null); setRecResult(null); setAresult(null) }}
                   >
-                    <span className="ri"><Icon name={ROLE_INFO[r].icon} size={17} /></span>
+                    <span className="ri"><Icon name={ROLE_INFO[r].icon} size={22} /></span>
                     <span className="rt">
-                      <span className="rn">{roleLabel(r)}</span>
+                      {/* each word stays whole, so "সাব-রেজিস্ট্রার" never breaks at its hyphen */}
+                      <span className="rn">{roleLabel(r).split(' ').map((w, i) => <Fragment key={i}>{i > 0 && ' '}<span className="nw">{w}</span></Fragment>)}</span>
                       <span className="rd">{ROLE_INFO[r][lang]}</span>
                     </span>
-                    {role === r && <span className="rcheck"><Icon name="check" size={13} /></span>}
+                    {role === r && <span className="rcheck"><Icon name="check" size={14} /></span>}
                   </button>
                 ))}
               </div>
@@ -885,6 +875,12 @@ export default function App() {
                       <div className="fact wide">
                         <div className="k">{tr('বন্ধক', 'Mortgage')}</div>
                         <div className="v"><Icon name="bank" size={16} /> {data.plot.mortgage.bank} <span className="muted" style={{ fontWeight: 500 }}>({tr('ঋণ নং', 'Loan no.')} {data.plot.mortgage.loan_ref})</span></div>
+                      </div>
+                    )}
+                    {data.plot.agreement && (
+                      <div className="fact wide">
+                        <div className="k">{tr('বায়নাপত্র', 'Sale agreement')}</div>
+                        <div className="v"><Icon name="file" size={16} /> {data.plot.agreement.seller} → {data.plot.agreement.buyer} <span className="muted" style={{ fontWeight: 500 }}>({tr('নং', 'No.')} {data.plot.agreement.agreement_no}, {tr('অগ্রিম', 'advance')} {taka(data.plot.agreement.advance)})</span></div>
                       </div>
                     )}
                   </div>
@@ -1100,6 +1096,61 @@ export default function App() {
                     <div className="alert success"><div className="alert-title"><Icon name="check" /> {tr('বন্ধক নিবন্ধিত হয়েছে।', 'Mortgage registered.')}</div></div>
                   )}
                   {mresult && mresult.body.error && <ErrorBox body={mresult.body} lang={lang} />}
+                </div>
+
+                {/* Sale agreement (bainapatra): one advance per plot */}
+                <div className="card">
+                  <div className="card-head">
+                    <CardTitle icon="file" title={tr('বায়নাপত্র (বিক্রয় চুক্তি)', 'Sale agreement (bainapatra)')} sub={tr('অগ্রিম নিয়ে বিক্রয়ের চুক্তি; একই জমিতে দ্বিতীয় বায়না আটকানো হয়', 'An advance paid to agree a sale; a second advance on the same plot is blocked')} />
+                    {data.plot.agreement
+                      ? <span className="badge amber"><Icon name="lock" size={13} /> {tr('চুক্তি আছে', 'Agreement active')}</span>
+                      : <span className="badge green">{tr('চুক্তি নেই', 'No agreement')}</span>}
+                  </div>
+                  {data.plot.agreement ? (
+                    <>
+                      <div className="party">{data.plot.agreement.seller} <span className="arrow"><Icon name="arrow" /></span> {data.plot.agreement.buyer}</div>
+                      <div className="meta">
+                        {tr('বায়নাপত্র নং', 'Agreement no.')}: {data.plot.agreement.agreement_no} · {tr('অগ্রিম', 'Advance')} {taka(data.plot.agreement.advance)} · {data.plot.agreement.date}
+                      </div>
+                      <div className="alert info">
+                        <Icon name="info" size={15} />{' '}
+                        {tr(
+                          `শুধু ${data.plot.agreement.buyer}-এর কাছে বিক্রয় করা যাবে। নামজারি হলে চুক্তি পূরণ হয়ে যাবে।`,
+                          `Only ${data.plot.agreement.buyer} can buy this plot. The agreement is fulfilled when the mutation is done.`,
+                        )}
+                      </div>
+                      <div className="grid2">
+                        <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file"><input className="input" value={acancel.agreement_no} onChange={(e) => setAcancel({ ...acancel, agreement_no: e.target.value })} placeholder={data.plot.agreement.agreement_no} /></Field>
+                        <Field label={tr('বাতিলের কারণ', 'Reason for cancelling')} req icon="info"><input className="input" value={acancel.reason} onChange={(e) => setAcancel({ ...acancel, reason: e.target.value })} placeholder={tr('যেমন: অগ্রিম ফেরত দেওয়া হয়েছে', 'e.g. advance returned')} /></Field>
+                      </div>
+                      <div className="actions">
+                        <button className="btn ghost" {...gated('agreement.cancel')} onClick={cancelAgreement}>{tr('বায়নাপত্র বাতিল', 'Cancel agreement')}</button>
+                      </div>
+                      {needs('agreement.cancel')}
+                    </>
+                  ) : (
+                    <>
+                      <div className="grid3">
+                        <Field label={tr('ক্রেতা', 'Buyer')} req icon="user"><input className="input" value={aform.buyer} onChange={(e) => setAform({ ...aform, buyer: e.target.value })} placeholder={tr('যেমন: Tania', 'e.g. Tania')} /></Field>
+                        <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file"><input className="input" value={aform.agreement_no} onChange={(e) => setAform({ ...aform, agreement_no: e.target.value })} placeholder={tr('যেমন: B-501/2026', 'e.g. B-501/2026')} /></Field>
+                        <Field label={tr('অগ্রিম (টাকা)', 'Advance (taka)')} req icon="bank"><input className="input" value={aform.advance} onChange={(e) => setAform({ ...aform, advance: e.target.value })} inputMode="decimal" placeholder="500000" /></Field>
+                      </div>
+                      <div className="fineprint"><Icon name="info" size={14} /> {tr(`বিক্রেতা: বর্তমান মালিক ${data.plot.current_owner}`, `Seller: the current owner, ${data.plot.current_owner}`)}</div>
+                      <div className="actions">
+                        <button className="btn primary" {...gated('agreement.create')} onClick={submitAgreement}>
+                          <Icon name="shield" size={16} /> {tr('বায়নাপত্র যাচাই ও নিবন্ধন করুন', 'Verify and register agreement')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
+                        </button>
+                      </div>
+                      {needs('agreement.create')}
+                    </>
+                  )}
+                  {aresult && aresult.body.blocked && (
+                    <BlockedBox title={tr('বায়নাপত্র আটকানো হয়েছে (Blocked)', 'Sale agreement blocked')} reasons={aresult.body.reasons} lang={lang} />
+                  )}
+                  {aresult && aresult.body.blocked === false && (
+                    <div className="alert success"><div className="alert-title"><Icon name="check" /> {tr('বায়নাপত্র নিবন্ধিত হয়েছে। এখন অন্য কারো কাছে বিক্রয় বা বন্ধক আটকানো থাকবে।', 'Sale agreement registered. Sale to anyone else and mortgage are now blocked.')}</div></div>
+                  )}
+                  {aresult && aresult.body.error && <ErrorBox body={aresult.body} lang={lang} />}
                 </div>
             </div>
 
