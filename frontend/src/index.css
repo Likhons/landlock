@@ -111,16 +111,15 @@ b, strong { font-weight: 600; }
   display: flex; flex-direction: column; overflow: hidden auto; overscroll-behavior: contain;
   background: radial-gradient(400px 300px at 0% 100%, rgba(31, 163, 107, 0.16), transparent 70%), linear-gradient(180deg, #0c3127, #082219);
   border-right: 1px solid rgba(212, 178, 106, 0.16);
-  /* no width transition: animating width re-lays out the whole page on every frame (janky).
-     The width changes in one step and the labels fade in instead. */
 }
-.sn-label { transition: opacity 0.18s ease; }
-.sn-foot { transition: opacity 0.18s ease; }
-@starting-style { .sn-foot { opacity: 0; } }
-.sidenav nav { padding: var(--s4) var(--s3); }
+/* Icons keep the same x in both widths (14px nav + 14px link padding), so on collapse/expand nothing
+   jumps: the labels and the footer drawing are simply clipped by the sidebar edge and fade. */
+.sn-label { transition: opacity 0.2s ease; }
+.sn-foot { transition: opacity 0.2s ease, visibility 0s; }
+.sidenav nav { padding: var(--s4) 14px; }
 .sidenav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .sidenav a {
-  position: relative; display: flex; align-items: center; gap: var(--s3); min-height: 44px; padding: 0 var(--s3);
+  position: relative; display: flex; align-items: center; gap: var(--s3); min-height: 44px; padding: 0 14px;
   border-radius: var(--r-sm); color: rgba(233, 243, 238, 0.82); text-decoration: none; font-size: 15px; font-weight: 500; white-space: nowrap;
   transition: background 0.2s var(--ease), color 0.2s var(--ease);
 }
@@ -128,9 +127,9 @@ b, strong { font-weight: 600; }
 .sidenav a:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
 .sidenav a.on { background: rgba(60, 207, 145, 0.14); color: #fff; font-weight: 600; }
 .sidenav a.on .icon { color: #5fe0a8; }
-.sidenav a.on::before { content: ''; position: absolute; left: calc(var(--s3) * -1); top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: #5fe0a8; }
+.sidenav a.on::before { content: ''; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: #5fe0a8; }
 .sidenav a:focus-visible { outline-color: #fff; }
-.sn-foot { margin-top: auto; padding: var(--s4) var(--s3) var(--s5); }
+.sn-foot { margin-top: auto; padding: var(--s4) var(--s3) var(--s5); width: 236px; flex: none; } /* fixed width: never squashed while the sidebar narrows */
 .sn-land { display: block; width: 100%; height: auto; opacity: 0.75; }
 .sn-land path, .sn-land circle { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .sn-land .ln-sky { stroke: rgba(212, 178, 106, 0.35); stroke-width: 1; }
@@ -140,12 +139,9 @@ b, strong { font-weight: 600; }
 .sn-land .ln-river { stroke: rgba(150, 200, 220, 0.55); stroke-width: 1.3; }
 .sn-tag { margin: var(--s3) 0 0; font-family: var(--serif); font-size: 19px; font-weight: 600; line-height: 1.3; color: rgba(233, 243, 238, 0.9); text-align: center; }
 .sn-tag span { display: block; font-size: 15px; font-weight: 500; color: var(--gold); }
-/* icons only */
-.sidenav.mini nav { padding-left: 14px; padding-right: 14px; }
-.sidenav.mini a { justify-content: center; padding: 0; }
-.sidenav.mini a.on::before { left: -14px; }
-.sidenav.mini .sn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); opacity: 0; }
-.sidenav.mini .sn-foot { display: none; }
+/* icons only: labels stay in place (and readable to screen readers), clipped and faded */
+.sidenav.mini .sn-label { opacity: 0; }
+.sidenav.mini .sn-foot { opacity: 0; visibility: hidden; transition: opacity 0.15s ease, visibility 0s linear 0.15s; }
 .sn-backdrop, .sn-head, .sn-hint { display: none; }
 /* below 1200px the sidebar is a drawer, opened by the menu button */
 @media (max-width: 1199px) {
@@ -182,10 +178,9 @@ b, strong { font-weight: 600; }
   /* the links ride in with the drawer itself: no per-item animation, so the slide is one
      compositor layer moving and nothing else */
   .sn-hint { display: block; margin: var(--s2) 0 0; text-align: center; font-size: 12px; color: rgba(233, 243, 238, 0.45); }
-  .sidenav.mini nav { padding: var(--s4) var(--s3); }
-  .sidenav.mini a { justify-content: flex-start; padding: 0 var(--s3); }
-  .sidenav.mini .sn-label { position: static; width: auto; height: auto; overflow: visible; clip: auto; opacity: 1; }
-  .sidenav.mini .sn-foot { display: block; }
+  .sidenav.mini .sn-label { opacity: 1; }
+  .sidenav.mini .sn-foot { opacity: 1; visibility: visible; }
+  .sn-foot { width: auto; }
   .sn-backdrop {
     /* no backdrop blur: blurring the whole page while fading is what made opening feel slow */
     display: block; position: fixed; inset: 0; z-index: 65; background: rgba(4, 22, 18, 0.55);
@@ -204,11 +199,19 @@ b, strong { font-weight: 600; }
   .menu-btn { margin-left: 0; }
   .app.nav-mini .menu-btn { margin-left: 4px; }
   .app > .topbar .brand { align-self: stretch; padding-left: 20px; margin-left: 8px; border-left: 1px solid rgba(255, 255, 255, 0.12); }
-  .sidenav { top: var(--head-h); height: calc(100vh - var(--head-h)); }
+  /* The sidebar is fixed and the page sits beside it with a margin. Collapsing/expanding animates
+     only the sidebar's own width (a small subtree); the page margin changes in one step and App
+     slides the page with a transform, so the page is never re-laid out frame by frame. */
+  .sidenav {
+    position: fixed; left: 0; top: var(--head-h); height: calc(100vh - var(--head-h));
+    contain: layout paint; transition: width 0.3s var(--ease);
+  }
+  .shell > .page { margin-left: var(--side-w); }
+  .shell { overflow-x: clip; } /* the page sliding in from the side never causes a horizontal scrollbar */
   /* centred over the page, not the sidebar, just under the sticky header */
   /* .app: these must beat the base .psw rules further down */
   .app .psw, .app .psw-menu { left: calc(50% + var(--side-w) / 2); }
-  .app .psw { top: calc(var(--head-h) + 10px); }
+  .app .psw { top: calc(var(--head-h) + 10px); transition: transform 0.25s var(--ease), opacity 0.2s ease, left 0.3s var(--ease); }
   .app .psw-menu { top: calc(var(--head-h) + 68px); }
   #map, #ledger, #top, #survey, #gap, .record { scroll-margin-top: calc(var(--head-h) + 76px); }
 }

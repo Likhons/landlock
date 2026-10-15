@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Logo, LogoMark } from './Logo.jsx'
 import PlotMap from './PlotMap.jsx'
 import SideNav from './SideNav.jsx'
 import PlotSwitcher from './PlotSwitcher.jsx'
 import DemoLab from './DemoLab.jsx'
-import { drawer, useDrawerOpen } from './navStore.js'
+import { drawer, sidebarMini, useDrawerOpen } from './navStore.js'
 import LedgerChain, { LedgerChecks, LedgerSeal } from './LedgerChain.jsx'
 
 // Backend address: set VITE_API_URL in frontend/.env (see .env.example); defaults to the local backend.
@@ -397,15 +397,25 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(false)
   // UI only: the floating plot switcher watches this map and appears once it has scrolled out of view
   const mapRef = useRef(null)
-  // UI only: sidebar (icons-only on wide screens, a drawer on small ones). SideNav tracks the section
-  // on screen itself, so scrolling re-renders only the sidebar, never this whole page.
-  const [navMini, setNavMini] = useState(() => { try { return localStorage.getItem('landlock.navMini') === '1' } catch { return false } })
-  // wide screens: icons-only sidebar (changes the page layout, so it is App state);
-  // smaller screens: the drawer, whose open state lives in navStore so the page does not re-render
+  // UI only: sidebar. Wide screens: icons-only or full (sidebarMini); smaller screens: a drawer.
+  // Both states live in navStore, not here, so neither ever re-renders this whole page; SideNav also
+  // tracks the section on screen itself. On collapse/expand the `nav-mini` class is switched directly,
+  // the page margin changes in one step, and the page slides from its old place with a transform
+  // (no per-frame layout), in step with the sidebar's width transition (0.3s, same easing as CSS).
+  const appRef = useRef(null)
+  const pageRef = useRef(null)
+  useLayoutEffect(() => sidebarMini.subscribe(() => {
+    const mini = sidebarMini.get()
+    if (appRef.current) appRef.current.classList.toggle('nav-mini', mini)
+    const el = pageRef.current
+    if (!el || !el.animate || !window.matchMedia('(min-width: 1200px)').matches
+      || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const shift = mini ? 160 : -160 // collapsing: the page was 160px further right
+    el.animate([{ transform: `translateX(${shift}px)` }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' })
+  }), [])
   const toggleNav = () => {
-    if (window.matchMedia('(min-width: 1200px)').matches) {
-      setNavMini((m) => { try { localStorage.setItem('landlock.navMini', m ? '0' : '1') } catch { /* private mode */ } return !m })
-    } else drawer.toggle()
+    if (window.matchMedia('(min-width: 1200px)').matches) sidebarMini.toggle()
+    else drawer.toggle()
   }
 
   const tr = (bn, en) => (lang === 'bn' ? bn : en)
@@ -585,7 +595,7 @@ export default function App() {
       : deedMismatch(p) ? { kind: 'alert', text: tr('অমিল', 'MISMATCH') } : null)
 
   return (
-    <div className={`app${navMini ? ' nav-mini' : ''}`}>
+    <div ref={appRef} className={`app${sidebarMini.get() ? ' nav-mini' : ''}`}>
       <header className="topbar">
         <div className="topbar-inner">
           <MenuButton onClick={toggleNav} label={tr('মেনু', 'Menu')} />
@@ -633,8 +643,8 @@ export default function App() {
       )}
 
       <div className="shell">
-      <SideNav lang={lang} mini={navMini} Icon={Icon} Logo={LogoMark} />
-      <main className="page">
+      <SideNav lang={lang} Icon={Icon} Logo={LogoMark} />
+      <main className="page" ref={pageRef}>
         <section className="hero" id="top">
           <div className="hero-copy">
             <svg className="hero-compass" viewBox="0 0 100 100" aria-hidden="true">

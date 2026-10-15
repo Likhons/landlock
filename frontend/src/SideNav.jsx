@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { drawer, useDrawerOpen } from './navStore.js'
+import { drawer, useDrawerOpen, useSidebarMini } from './navStore.js'
 
 // same breakpoint as the drawer CSS in index.css
 const DRAWER_MQ = window.matchMedia('(max-width: 1199px)')
@@ -42,10 +42,11 @@ function Landscape() {
   )
 }
 
-export default function SideNav({ lang, mini, Icon, Logo }) {
+export default function SideNav({ lang, Icon, Logo }) {
   const tr = (bn, en) => (lang === 'bn' ? bn : en)
   // drawer state comes from navStore, so opening it re-renders only this component
   const open = useDrawerOpen()
+  const mini = useSidebarMini()
   const onClose = () => drawer.set(false)
   const onNavigate = onClose
   // below 1200px the sidebar is a drawer; when closed it sits painted just off screen, so it is made

@@ -18,3 +18,21 @@ export const drawer = {
 }
 
 export const useDrawerOpen = () => useSyncExternalStore(drawer.subscribe, drawer.get)
+
+// Wide screens: icons-only sidebar, remembered between visits. Also kept outside App: App toggles
+// the page's `nav-mini` class directly on change, so collapsing never re-renders the page.
+let mini = false
+try { mini = localStorage.getItem('landlock.navMini') === '1' } catch { /* private mode */ }
+const miniSubs = new Set()
+
+export const sidebarMini = {
+  get: () => mini,
+  toggle() {
+    mini = !mini
+    try { localStorage.setItem('landlock.navMini', mini ? '1' : '0') } catch { /* private mode */ }
+    miniSubs.forEach((fn) => fn())
+  },
+  subscribe(fn) { miniSubs.add(fn); return () => miniSubs.delete(fn) },
+}
+
+export const useSidebarMini = () => useSyncExternalStore(sidebarMini.subscribe, sidebarMini.get)
