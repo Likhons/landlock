@@ -79,6 +79,7 @@ const ICONS = {
   bank: <path d="M3 10h18M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 21h18M12 3l9 5H3z" />,
   history: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>,
   user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,
+  users: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8" /></>,
   info: <><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></>,
   clock: <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
   zap: <path d="M13 2 3 14h9l-1 8 10-12h-9z" />,
@@ -445,9 +446,11 @@ export default function App() {
     const r = Object.keys(roles.roles).find((k) => roles.roles[k].permissions.includes(perm))
     return (
       <div className="desk-gate">
-        <Icon name="lock" size={16} />
-        <span>{tr(`এই দলিল শুধু ${whoCan(perm)} নিবন্ধন করতে পারেন। আপনি এখন: ${roleLabel(role)}।`, `Only the ${whoCan(perm)} can register this deed. You are: ${roleLabel(role)}.`)}</span>
-        {r && <button type="button" onClick={() => switchRole(r)}>{tr(`${roleLabel(r)} হিসেবে চালান`, `Act as ${roleLabel(r)}`)}</button>}
+        <Icon name="shield" size={20} />
+        <span>
+          {tr(<>এই দলিল শুধু {whoCan(perm)} নিবন্ধন করতে পারেন। আপনি এখন: <b>{roleLabel(role)}</b>।</>, <>Only the {whoCan(perm)} can register this deed. You are: <b>{roleLabel(role)}</b>.</>)}
+        </span>
+        {r && <button type="button" onClick={() => switchRole(r)}><Icon name="user" size={15} /> {tr(`${roleLabel(r)} হিসেবে চালান`, `Act as ${roleLabel(r)}`)}</button>}
       </div>
     )
   }
@@ -1047,26 +1050,30 @@ export default function App() {
                             <div className="dk-kicker">{tr('নতুন দলিল', 'New deed')} · {tr('সাব-রেজিস্ট্রি অফিস', 'Sub-Registry office')}</div>
                             <h3 className="dk-title">{tr(d.bn, d.en)}</h3>
                           </div>
-                          <span className="dk-seal" aria-hidden="true"><Icon name={d.icon} size={22} /></span>
+                          <div className="dk-head-r">
+                            {/* a draft reference only: the deed has no number until it is registered */}
+                            <span className="dk-ref">{tr('খসড়া', 'Draft')}: SR-{new Date().getFullYear()}-{String(entries.length + 1).padStart(4, '0')}</span>
+                            <span className="dk-seal" aria-hidden="true"><span><Icon name={d.icon} size={22} /></span></span>
+                          </div>
                         </div>
 
-                        <div className="dk-tofsil">
-                          <span className="dk-sec">{tr('তফসিল', 'Schedule')}</span>
-                          <span><i>{tr('মৌজা', 'Mouza')}</i> {plot.mouza}</span>
-                          <span><i>{tr('খতিয়ান', 'Khatian')}</i> {plot.khatian_no}</span>
-                          <span><i>{tr('দাগ', 'Dag')}</i> {plot.dag_no}</span>
-                          <span><i>{tr('পরিমাণ', 'Area')}</i> {plot.area} {tr('শতক', 'decimal')}</span>
+                        <div className="dk-tofsil" aria-label={tr('তফসিল (জমির বিবরণ)', 'Schedule of the land')}>
+                          <span className="dk-tofsil-h"><Icon name="landpin" size={22} /> {tr('তফসিল', 'Schedule')}</span>
+                          <span className="dk-tf"><i>{tr('মৌজা', 'Mouza')}</i><b>{plot.mouza}</b></span>
+                          <span className="dk-tf"><i>{tr('খতিয়ান', 'Khatian')}</i><b>{plot.khatian_no}</b></span>
+                          <span className="dk-tf"><i>{tr('দাগ', 'Dag')}</i><b>{plot.dag_no}</b></span>
+                          <span className="dk-tf"><i>{tr('পরিমাণ', 'Area')}</i><b>{plot.area} {tr('শতক', 'decimal')}</b></span>
                         </div>
 
                         {d.id === 'sale' && (
                           <>
                             {tx && <div className="dk-note"><Icon name="lock" size={15} /> {tr(`এই জমিতে একটি বিক্রয় চলছে (${tx.seller} → ${tx.buyer})। নতুন বিক্রয় চেষ্টা করলে LandLock আটকাবে।`, `A sale is already in progress here (${tx.seller} → ${tx.buyer}). A new sale will be blocked by LandLock.`)}</div>}
-                            <span className="dk-sec">{tr('পক্ষগণ', 'Parties')}</span>
+                            <div className="dk-sec"><Icon name="users" size={17} /><span>{tr('পক্ষগণ', 'Parties')}</span></div>
                             {parties(
                               party('দাতা (বিক্রেতা)', 'Seller', input(form.seller, setField('seller'))),
                               party('গ্রহীতা (ক্রেতা)', 'Buyer', input(form.buyer, setField('buyer'), tr('যেমন: Karim', 'e.g. Karim'))),
                             )}
-                            <span className="dk-sec">{tr('দলিলের তথ্য', 'Deed details')}</span>
+                            <div className="dk-sec"><Icon name="file" size={17} /><span>{tr('দলিলের তথ্য', 'Deed details')}</span></div>
                             <div className="grid2">
                               <Field label={tr('দলিল নং', 'Deed no.')} req icon="file">{input(form.deed_no, setField('deed_no'), tr('যেমন: D-1001', 'e.g. D-1001'))}</Field>
                               <Field label={tr('দলিলের পরিমাণ (শতক)', 'Deed area (decimal)')} req icon="grid" hint={tr(`শুধু পুরো জমি (${plot.area} শতক), প্রোটোটাইপ`, `Full plot only (${plot.area} decimal) in this prototype`)}>
@@ -1107,12 +1114,12 @@ export default function App() {
                         {d.id === 'agreement' && (plot.agreement ? (
                           <>
                             <div className="dk-standing">
-                              <span className="dk-sec">{tr('চলমান বায়নাপত্র', 'Agreement in force')}</span>
+                              <div className="dk-sec"><Icon name="lock" size={17} /><span>{tr('চলমান বায়নাপত্র', 'Agreement in force')}</span></div>
                               <div className="party">{plot.agreement.seller} <span className="arrow"><Icon name="arrow" /></span> {plot.agreement.buyer}</div>
                               <div className="meta">{tr('নং', 'No.')} {plot.agreement.agreement_no} · {tr('অগ্রিম', 'Advance')} {taka(plot.agreement.advance)} · {plot.agreement.date}</div>
                               <div className="dk-note"><Icon name="info" size={15} /> {tr(`শুধু ${plot.agreement.buyer}-এর কাছে বিক্রয় করা যাবে; অন্য কাউকে বিক্রয়, দ্বিতীয় বায়না বা বন্ধক আটকানো। নামজারি হলে চুক্তি পূরণ হবে।`, `Only ${plot.agreement.buyer} can buy this plot; a sale to anyone else, a second advance and a mortgage are blocked. The mutation fulfils it.`)}</div>
                             </div>
-                            <span className="dk-sec">{tr('চুক্তি বাতিল', 'Cancel the agreement')}</span>
+                            <div className="dk-sec"><Icon name="x" size={17} /><span>{tr('চুক্তি বাতিল', 'Cancel the agreement')}</span></div>
                             <div className="grid2">
                               <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file">{input(acancel.agreement_no, (e) => setAcancel({ ...acancel, agreement_no: e.target.value }), tr('যেমন: B-501/2026', 'e.g. B-501/2026'))}</Field>
                               <Field label={tr('বাতিলের কারণ', 'Reason for cancelling')} req icon="info">{input(acancel.reason, (e) => setAcancel({ ...acancel, reason: e.target.value }), tr('যেমন: অগ্রিম ফেরত দেওয়া হয়েছে', 'e.g. advance returned'))}</Field>
@@ -1124,12 +1131,12 @@ export default function App() {
                           </>
                         ) : (
                           <>
-                            <span className="dk-sec">{tr('পক্ষগণ', 'Parties')}</span>
+                            <div className="dk-sec"><Icon name="users" size={17} /><span>{tr('পক্ষগণ', 'Parties')}</span></div>
                             {parties(
                               party('বিক্রেতা (মালিক)', 'Seller (owner)', <div className="dk-fixed"><Icon name="user" size={16} /> {plot.current_owner}</div>),
                               party('ক্রেতা (অগ্রিম দিচ্ছেন)', 'Buyer (paying the advance)', input(aform.buyer, (e) => setAform({ ...aform, buyer: e.target.value }), tr('যেমন: Tania', 'e.g. Tania'))),
                             )}
-                            <span className="dk-sec">{tr('চুক্তির তথ্য', 'Agreement details')}</span>
+                            <div className="dk-sec"><Icon name="deed" size={17} /><span>{tr('চুক্তির তথ্য', 'Agreement details')}</span></div>
                             <div className="grid2">
                               <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file">{input(aform.agreement_no, (e) => setAform({ ...aform, agreement_no: e.target.value }), tr('যেমন: B-501/2026', 'e.g. B-501/2026'))}</Field>
                               <Field label={tr('অগ্রিম (টাকা)', 'Advance (taka)')} req icon="bank" hint={Number(aform.advance) > 0 ? `= ${taka(aform.advance)}` : undefined}>
@@ -1157,7 +1164,7 @@ export default function App() {
                           <>
                             {plot.mortgage && (
                               <div className="dk-standing">
-                                <span className="dk-sec">{tr('চলমান বন্ধক', 'Mortgage in force')}</span>
+                                <div className="dk-sec"><Icon name="lock" size={17} /><span>{tr('চলমান বন্ধক', 'Mortgage in force')}</span></div>
                                 <div className="party"><Icon name="bank" /> {plot.mortgage.bank}</div>
                                 <div className="meta">{tr('ঋণ নং', 'Loan no.')} {plot.mortgage.loan_ref}</div>
                                 <div className="dk-release">
@@ -1166,12 +1173,12 @@ export default function App() {
                                 </div>
                               </div>
                             )}
-                            <span className="dk-sec">{tr('পক্ষগণ', 'Parties')}</span>
+                            <div className="dk-sec"><Icon name="users" size={17} /><span>{tr('পক্ষগণ', 'Parties')}</span></div>
                             {parties(
                               party('বন্ধকদাতা (মালিক)', 'Mortgagor (owner)', input(mform.owner, (e) => setMform({ ...mform, owner: e.target.value }), plot.current_owner)),
                               party('বন্ধকগ্রহীতা (ব্যাংক)', 'Mortgagee (bank)', input(mform.bank, (e) => setMform({ ...mform, bank: e.target.value }), tr('যেমন: Sonali Bank', 'e.g. Sonali Bank'))),
                             )}
-                            <span className="dk-sec">{tr('ঋণের তথ্য', 'Loan details')}</span>
+                            <div className="dk-sec"><Icon name="bank" size={17} /><span>{tr('ঋণের তথ্য', 'Loan details')}</span></div>
                             <div className="grid2">
                               <Field label={tr('ঋণ নং', 'Loan no.')} req icon="file">{input(mform.loan_ref, (e) => setMform({ ...mform, loan_ref: e.target.value }), tr('যেমন: LN-101', 'e.g. LN-101'))}</Field>
                             </div>
