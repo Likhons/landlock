@@ -31,6 +31,7 @@ LandLock shows how a shared, plot-level lock plus a verifiable history can stop 
 | Registered but not mutated | Flagged Yellow and listed on a "Registered but not mutated" dashboard. |
 | **Deed and khatian disagree** (registration–mutation mismatch) | Each plot's latest **Sub-Registry deed** is compared with the **khatian** (AC Land record) side by side. If the deed names a different buyer than the khatian owner (deed registered, mutation never done), the plot is **Red and sales/mortgages are blocked**: the old owner cannot sell again. A different area is a Yellow warning. Every message says it is a mismatch, not proof of fraud. The AC Land Officer can complete the missing mutation (`reconcile`), which is recorded as a signed ledger event. |
 | Selling more (or less) land than recorded | Larger area blocked (`AREA_EXCEEDS`); partial sales rejected (`PARTIAL_SALE_NOT_SUPPORTED`) because plot subdivision is not built yet. |
+| **Two advances for one plot** (bainapatra) | A registered sale agreement (বায়নাপত্র) records who paid the advance. A second agreement (`DOUBLE_AGREEMENT`), a sale to anyone else (`AGREEMENT_EXISTS`) and a mortgage are blocked; the plot shows Yellow. Only the agreement's buyer can buy, and the mutation fulfils the agreement. Cancelling needs the agreement number and a reason. |
 | Mortgaged land | Sale of a mortgaged plot, double mortgage, mortgage during a sale and mortgage by a non-owner are blocked; release needs the matching loan number. |
 | Reused deed numbers, self-sales | `DUPLICATE_DEED`, `SAME_PARTY`. |
 | Suspicious survey history | Owner changes without a deed/inheritance record, or area increases, between CS / SA / RS / BS are flagged Yellow (a warning, not proof of fraud). |
@@ -83,7 +84,7 @@ LandLock/
 │   ├── package.json
 │   └── README.md            ← API and technical reference
 └── frontend/                ← React + Vite UI
-    ├── src/                 ← App.jsx, PlotMap.jsx (mouza map), Logo.jsx, index.css
+    ├── src/                 ← App.jsx, PlotMap.jsx (mouza map), LedgerChain.jsx, SideNav.jsx, Logo.jsx, index.css
     ├── public/              ← favicon
     ├── .env.example
     ├── package.json
@@ -188,15 +189,16 @@ Remove-Item Env:NODE_ENV; Remove-Item Env:LANDLOCK_DEMO_MODE
 4. **AC Land Officer:** complete the mutation → Karim owns P1, plot unlocked. (Or reject it with a reason → **Disputed**, Red.)
 5. Click **Change P1 owner directly (demo)** → the banner turns red ("records do not match the ledger") and any new sale is refused. **Reset (demo)** restores everything.
 6. Switch to **Buyer**: everything is read-only; with "Enable blocked buttons" the server answers ⛔ Permission denied.
-7. **Deed vs khatian (P6):** the deed 1450/2019 says Monir sold to Shapla, but the khatian still shows Monir → Red. As Sub-Registrar try selling P6 as Monir → **blocked**. As **AC Land Officer** click *Complete mutation for deed 1450/2019* → owner Shapla, Green, records agree. **P7** shows an area mismatch (deed 14 vs khatian 18 decimal) as a Yellow warning.
+7. **Bainapatra (P5):** as Sub-Registrar register a sale agreement Nasrin → Tania (B-501/2026, advance 500000). Try a second agreement to Babul → **blocked: a second advance cannot be taken**. Try a sale to Babul → blocked; a sale to Tania goes through.
+8. **Deed vs khatian (P6):** the deed 1450/2019 says Monir sold to Shapla, but the khatian still shows Monir → Red. As Sub-Registrar try selling P6 as Monir → **blocked**. As **AC Land Officer** click *Complete mutation for deed 1450/2019* → owner Shapla, Green, records agree. **P7** shows an area mismatch (deed 14 vs khatian 18 decimal) as a Yellow warning.
 
 ## 8. Sample data
 
-Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `landlock-backend/landlock-backend/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
+Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `backend/src/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
 
 ## 9. Cryptographic integrity workflow
 
-1. Every event (sale started / blocked / registered / mutated / rejected / cancelled, mortgage created / blocked / released) is appended to the ledger.
+1. Every event (sale started / blocked / registered / mutated / rejected / cancelled, mortgage created / blocked / released, sale agreement created / blocked / cancelled) is appended to the ledger.
 2. Each entry stores `hash = SHA-256(previous hash + event)`, so changing any past entry breaks every link after it.
 3. The hash is **signed with Ed25519** (`keys.json`). Someone who edits an entry and recomputes all hashes still cannot produce valid signatures without the private key.
 4. Entry #1 is a signed **GENESIS** entry that must equal the starting register; entry ids must run 1, 2, 3…

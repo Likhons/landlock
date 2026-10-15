@@ -58,6 +58,72 @@ function registryAreaReason(plot) {
 // Deed numbers are compared without spaces/case, so "d-1" and " D-1 " count as the same deed.
 const normDeed = (v) => String(v).trim().toUpperCase();
 
+// ---- Sale agreement (bainapatra) ----
+// plot.agreement = a registered bainapatra: the owner took an advance (bayna) from a buyer and agreed
+// to sell to them. Taking a second advance for the same plot from someone else is a common form of
+// double-selling, so while an agreement stands, a sale to anyone else, a second agreement and a
+// mortgage are blocked. A sale to the agreement's buyer is allowed; its mutation fulfils the agreement.
+const taka = (n) => `৳${Number(n).toLocaleString('en-IN')}`;
+
+function agreementReason(plot, action) {
+  const a = plot.agreement;
+  const what = {
+    sale: { bn: `শুধু চুক্তির ক্রেতা ${a.buyer}-এর কাছে বিক্রয় করা যাবে`, en: `the plot can only be sold to the agreement's buyer, ${a.buyer}` },
+    mortgage: { bn: 'চুক্তি থাকা অবস্থায় বন্ধক রাখা যাবে না', en: 'it cannot be mortgaged while the agreement stands' },
+    agreement: { bn: 'একই জমির জন্য দ্বিতীয় বায়না নেওয়া যাবে না', en: 'a second advance cannot be taken for the same plot' },
+  }[action];
+  return {
+    level: RED, code: action === 'agreement' ? 'DOUBLE_AGREEMENT' : 'AGREEMENT_EXISTS',
+    bn: `এই জমির জন্য আগেই বায়নাপত্র নিবন্ধিত আছে (নং ${a.agreement_no}, ${a.seller} → ${a.buyer}, অগ্রিম ${taka(a.advance)})। ${what.bn}। চুক্তি বাতিল না হওয়া পর্যন্ত এটি বহাল থাকবে।`,
+    en: `A sale agreement (bainapatra) is already registered for this plot (no. ${a.agreement_no}, ${a.seller} → ${a.buyer}, advance ${taka(a.advance)}), so ${what.en}. This stays until the agreement is cancelled.`,
+  };
+}
+
+// Checks run when someone tries to register a sale agreement (bainapatra) on a plot.
+function checkAgreement(plot, seller, buyer, agreementNo, usedAgreementNos = []) {
+  const reasons = [];
+  if (plot.status === 'Pending') {
+    reasons.push({
+      level: RED, code: 'SALE_IN_PROGRESS',
+      bn: 'এই জমির বিক্রয় চলছে। এখন বায়নাপত্র নিবন্ধন করা যাবে না।',
+      en: 'A sale is in progress on this plot. A sale agreement cannot be registered now.',
+    });
+  }
+  if (plot.status === 'Disputed') reasons.push(disputedReason());
+  if (registryOwnerMismatch(plot)) reasons.push(registryOwnerReason(plot, true));
+  if (plot.mortgage) {
+    reasons.push({
+      level: RED, code: 'PLOT_MORTGAGED',
+      bn: `এই জমি ${plot.mortgage.bank}-এ বন্ধক আছে (ঋণ নং ${plot.mortgage.loan_ref})। বন্ধক মুক্ত না হলে বায়নাপত্র করা যাবে না।`,
+      en: `This plot is mortgaged to ${plot.mortgage.bank} (loan ${plot.mortgage.loan_ref}). No sale agreement until the mortgage is released.`,
+    });
+  }
+  if (plot.agreement) reasons.push(agreementReason(plot, 'agreement'));
+  if (plot.current_owner !== seller) {
+    reasons.push({
+      level: RED, code: 'NOT_OWNER',
+      bn: `বিক্রেতা (${seller}) রেকর্ড অনুযায়ী এই জমির মালিক নন। বর্তমান মালিক: ${plot.current_owner}।`,
+      en: `Seller (${seller}) is not the recorded owner. Current owner: ${plot.current_owner}.`,
+    });
+  }
+  if (buyer === seller) {
+    reasons.push({
+      level: RED, code: 'SAME_PARTY',
+      bn: `ক্রেতা ও বিক্রেতা একই ব্যক্তি (${seller})।`,
+      en: `Buyer and seller are the same person (${seller}).`,
+    });
+  }
+  if (usedAgreementNos.map(normDeed).includes(normDeed(agreementNo))) {
+    reasons.push({
+      level: RED, code: 'DUPLICATE_AGREEMENT_NO',
+      bn: `বায়নাপত্র নং ${agreementNo} আগেই ব্যবহার হয়েছে। একই নম্বর দুইবার ব্যবহার করা যায় না।`,
+      en: `Agreement no. ${agreementNo} has already been used. The same number cannot be used twice.`,
+    });
+  }
+  const level = reasons.length ? RED : GREEN;
+  return { level, reasons, allowed: !reasons.length };
+}
+
 // Checks run when someone tries to START a sale on a plot.
 // buyer and usedDeedNos are optional so callers that only check the plot still work.
 function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } = {}) {
@@ -79,6 +145,7 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
       en: `This plot is mortgaged to ${plot.mortgage.bank} (loan ${plot.mortgage.loan_ref}). It cannot be sold until the mortgage is released.`,
     });
   }
+  if (plot.agreement && buyer !== undefined && buyer !== plot.agreement.buyer) reasons.push(agreementReason(plot, 'sale'));
   if (plot.current_owner !== seller) {
     reasons.push({
       level: RED, code: 'NOT_OWNER',
@@ -136,6 +203,13 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
       en: `Sub-Registry deed (${plot.registry.deed_no}) and khatian agree on the owner`,
     });
   }
+  if (plot.agreement && buyer !== undefined) {
+    checks.push({
+      code: 'AGREEMENT_BUYER_MATCH', passed: !failed('AGREEMENT_EXISTS'),
+      bn: `ক্রেতা বায়নাপত্র (${plot.agreement.agreement_no})-এর ক্রেতা ${plot.agreement.buyer}`,
+      en: `Buyer is ${plot.agreement.buyer}, the buyer named in sale agreement ${plot.agreement.agreement_no}`,
+    });
+  }
   if (deedNo !== undefined) {
     checks.push({
       code: 'UNIQUE_DEED', passed: !failed('DUPLICATE_DEED'),
@@ -166,6 +240,7 @@ function checkMortgage(plot, owner, bank) {
       en: `This plot is already mortgaged to ${plot.mortgage.bank}. Double mortgage blocked for ${bank}.`,
     });
   }
+  if (plot.agreement) reasons.push(agreementReason(plot, 'mortgage'));
   if (plot.current_owner !== owner) {
     reasons.push({
       level: RED, code: 'NOT_OWNER',
@@ -242,6 +317,14 @@ function assessPlot(plot, activeTx, ledgerStatus, disputedTx) {
     });
   }
 
+  if (plot.agreement) {
+    const a = plot.agreement;
+    reasons.push({
+      level: YELLOW, code: 'AGREEMENT_ACTIVE',
+      bn: `বায়নাপত্র নিবন্ধিত: ${a.seller} এই জমি ${a.buyer}-এর কাছে বিক্রয়ের চুক্তি করেছেন (নং ${a.agreement_no}, অগ্রিম ${taka(a.advance)})। অন্য কারো কাছে বিক্রয় বা বন্ধক বন্ধ। আপনি চুক্তির ক্রেতা না হলে এই জমি কিনবেন না।`,
+      en: `Sale agreement registered: ${a.seller} agreed to sell this plot to ${a.buyer} (no. ${a.agreement_no}, advance ${taka(a.advance)}). Sale to anyone else and mortgage are blocked. Do not buy unless you are the agreement's buyer.`,
+    });
+  }
   if (registryOwnerMismatch(plot)) reasons.push(registryOwnerReason(plot, false));
   if (registryAreaMismatch(plot)) reasons.push(registryAreaReason(plot));
 
@@ -281,4 +364,4 @@ const NOT_CHECKED = [
   },
 ];
 
-module.exports = { checkSale, checkMortgage, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED };
+module.exports = { checkSale, checkMortgage, checkAgreement, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED };

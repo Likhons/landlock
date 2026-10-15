@@ -879,6 +879,69 @@ async function keyAndPersistenceTests() {
   ok('K18. Server output never contained a private key or the data folder path', !/PRIVATE KEY/.test(serverLog) && !serverLog.includes(TMP));
 }
 
+async function agreementTests() {
+  section('Sale agreement (bainapatra): one advance per plot');
+  await post('/dev/reset');
+  const A = { plot_id: 'P5', seller: 'Nasrin', buyer: 'Tania', agreement_no: 'B-501/2026', advance: 500000 };
+
+  let r = await post('/agreement/create', A, BUYER);
+  ok('A1. Buyer role cannot register an agreement (403)', r.status === 403);
+  r = await post('/agreement/create', { ...A, advance: 'abc' }, SR);
+  const r2 = await post('/agreement/create', { ...A, advance: -5, agreement_no: '' }, SR);
+  ok('A2. Invalid advance / agreement no. rejected (400)', r.status === 400 && r.body.fields.includes('advance')
+    && r2.status === 400 && r2.body.fields.includes('advance') && r2.body.fields.includes('agreement_no'));
+
+  r = await post('/agreement/create', A, SR);
+  ok('A3. Agreement registered by the owner', r.status === 201 && r.body.agreement.buyer === 'Tania' && r.body.agreement.advance === 500000);
+  let p = await get('/plots/P5');
+  ok('A4. Plot shows Yellow AGREEMENT_ACTIVE, bilingual', p.risk.level === 'yellow'
+    && p.risk.reasons.some((x) => x.code === 'AGREEMENT_ACTIVE' && /Tania/.test(x.en) && /Tania/.test(x.bn)));
+
+  r = await post('/agreement/create', { ...A, buyer: 'Babul', agreement_no: 'B-502/2026' }, SR);
+  ok('A5. Second advance for the same plot blocked (DOUBLE_AGREEMENT)', r.status === 409 && r.body.reasons.some((x) => x.code === 'DOUBLE_AGREEMENT'));
+  ok('A6. Blocked agreement is kept as signed audit evidence', (await get('/plots/P5')).history.some((h) => h.event_type === 'AGREEMENT_BLOCKED'));
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Babul', deed_no: 'D-A1', deed_area: 20 }, SR);
+  ok('A7. Sale to someone else blocked (AGREEMENT_EXISTS)', r.status === 409 && r.body.reasons.some((x) => x.code === 'AGREEMENT_EXISTS')
+    && r.body.checks.some((c) => c.code === 'AGREEMENT_BUYER_MATCH' && !c.passed));
+  r = await post('/mortgage/create', { plot_id: 'P5', owner: 'Nasrin', bank: 'Sonali Bank', loan_ref: 'LN-A1' }, SR);
+  ok('A8. Mortgage blocked while the agreement stands', r.status === 409 && r.body.reasons.some((x) => x.code === 'AGREEMENT_EXISTS'));
+  r = await post('/agreement/create', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', agreement_no: 'b-501/2026 ', advance: 1000 }, SR);
+  ok('A9. Reused agreement number blocked (DUPLICATE_AGREEMENT_NO)', r.status === 409 && r.body.reasons.some((x) => x.code === 'DUPLICATE_AGREEMENT_NO'));
+
+  r = await post('/agreement/cancel', { plot_id: 'P5', agreement_no: 'B-999', reason: 'test' }, SR);
+  const r3 = await post('/agreement/cancel', { plot_id: 'P5', agreement_no: 'B-501/2026' }, SR);
+  ok('A10. Cancel needs the matching number and a reason', r.status === 409 && r.body.code === 'AGREEMENT_MISMATCH'
+    && r3.status === 400 && r3.body.fields.includes('reason') && (await get('/plots/P5')).plot.agreement);
+
+  r = await post('/sale/initiate', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Tania', deed_no: 'D-A2', deed_area: 20 }, SR);
+  ok('A11. Sale to the agreement buyer allowed', r.status === 201 && r.body.checks.some((c) => c.code === 'AGREEMENT_BUYER_MATCH' && c.passed));
+  await post(`/sale/${r.body.transaction.id}/register`, {}, SR);
+  await post(`/sale/${r.body.transaction.id}/mutate`, {}, AC);
+  p = await get('/plots/P5');
+  ok('A12. After mutation the agreement is fulfilled (Tania owns, no agreement, Green)', p.plot.current_owner === 'Tania'
+    && !p.plot.agreement && p.risk.level === 'green');
+
+  await post('/agreement/create', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', agreement_no: 'B-101', advance: 20000 }, SR);
+  r = await post('/agreement/cancel', { plot_id: 'P1', agreement_no: 'B-101', reason: 'Buyer withdrew; advance returned' }, SR);
+  ok('A13. Agreement cancelled with a reason', r.status === 200 && !(await get('/plots/P1')).plot.agreement);
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Salam', deed_no: 'D-A3', deed_area: 10 }, SR);
+  ok('A14. After cancellation anyone may buy', r.status === 201);
+  ok('A15. Ledger valid after all agreement events', (await get('/ledger/verify')).valid === true);
+
+  await stop(); await start();
+  ok('A16. Agreement history replays after a restart', (await get('/ledger/verify')).valid === true);
+
+  await post('/agreement/create', { plot_id: 'P2', seller: 'Karim', buyer: 'Hasan', agreement_no: 'B-201', advance: 300000 }, SR);
+  await stop();
+  const d = readData();
+  delete d.plots.find((x) => x.id === 'P2').agreement;
+  writeData(d);
+  await start();
+  const v = await get('/ledger/verify');
+  ok('A17. Agreement deleted directly in data.json is detected', v.valid === false && v.kind === 'state');
+  await post('/dev/reset');
+}
+
 (async () => {
   try {
     await start();
@@ -891,6 +954,7 @@ async function keyAndPersistenceTests() {
     await wordingTests();
     await mortgageLookupConcurrencyTests();
     await registryMismatchTests();
+    await agreementTests();
     await integrityTests();
     await restartTests();
     await demoGuardTests();

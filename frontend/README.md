@@ -30,9 +30,9 @@ There is no Vite proxy: the browser calls the backend directly (the backend allo
 - **DEMO ROLE SWITCH** (top): Buyer (read-only, default), Sub-Registrar, AC Land Officer. Buttons a role cannot use are disabled; tick "Enable blocked buttons" to watch the **server** refuse them. This is not a login.
 - **Plot details and risk card:** owner, area, lock status, mortgage, and the Green / Yellow / Red result with every reason. Green means "No warnings found", not a legal guarantee.
 - **Survey history** CS → SA → RS → BS with unexplained changes highlighted (sample data).
-- **Sale in progress / Disputed** cards, **Start a new sale** and **Bank mortgage** forms. An accepted sale lists the checks that passed and what is not checked.
+- **Sale in progress / Disputed** cards, **Start a new sale**, **Bank mortgage** and **Sale agreement (bainapatra)** forms. An accepted sale lists the checks that passed and what is not checked.
 - **History (Ledger)** with hashes, signatures and the acting role, plus the **Registered but not mutated** list.
 - **Demo tools** (tamper, smart tamper, delete last entry, change owner directly, reset): shown only when the backend runs with `npm run demo`.
 
 ## Structure
-`src/App.jsx` holds the whole interface (inline styles, bilingual text); `src/main.jsx` mounts it.
+`src/App.jsx` holds the page and most components; `PlotMap.jsx` (mouza map), `LedgerChain.jsx` (ledger vault), `SideNav.jsx` (sidebar) and `Logo.jsx` are split out; `index.css` is the design system; `src/main.jsx` mounts it.

@@ -11,7 +11,7 @@ const path = require('path');
 const db = require('./db');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, partialSale, registryOwnerMismatch } = require('./rules');
+const { checkSale, checkMortgage, checkAgreement, partialSale, registryOwnerMismatch } = require('./rules');
 const { writeJsonAtomic } = require('./fsutil');
 
 const GENESIS = '0'.repeat(64);
@@ -44,6 +44,15 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 function deedRecord(tx) {
   return { office: 'Sub-Registry Office (via LandLock)', deed_no: tx.deed_no, seller: tx.seller, buyer: tx.buyer, area: tx.deed_area, tx_id: tx.id };
 }
+
+// A registered sale agreement (bainapatra), built from its AGREEMENT_CREATED event data.
+// Used by the create route and by replay, so both build exactly the same record.
+function agreementRecord(d) {
+  return { agreement_no: d.agreement_no, seller: d.seller, buyer: d.buyer, advance: d.advance, date: d.date };
+}
+
+// Every agreement number ever registered (a number may not be reused, even after cancellation)
+const usedAgreementNos = (entries) => entries.filter((e) => e.event_type === 'AGREEMENT_CREATED').map((e) => e.data.agreement_no);
 
 // Ledgers created before sample plots P6/P7 were added start from P1-P5 only; they stay valid.
 const LEGACY_PLOT_IDS = ['P1', 'P2', 'P3', 'P4', 'P5'];
@@ -120,6 +129,7 @@ function reset() {
 function replay(ledger) {
   const plots = new Map(ledger[0].data.plots.map((p) => [p.id, clone(p)]));
   const txs = new Map();
+  const agreementNos = [];
   for (const e of ledger.slice(1)) {
     const d = e.data || {};
     const fail = (why) => ({ error: { brokenAt: e.id, reason: `Entry #${e.id} (${e.event_type}): ${why}` } });
@@ -162,8 +172,20 @@ function replay(ledger) {
         if (d.new_owner !== tx.buyer) return fail('new owner does not match the registered buyer');
         plot.current_owner = tx.buyer;
         plot.status = 'Free';
+        delete plot.agreement; // the sale agreement (if any) is fulfilled
         tx.mutation_status = 'done';
         tx.state = 'completed';
+        break;
+      case 'AGREEMENT_CREATED':
+        if (typeof d.advance !== 'number' || !Number.isFinite(d.advance) || d.advance <= 0) return fail('advance is not a positive number');
+        if (!checkAgreement(plot, d.seller, d.buyer, d.agreement_no, agreementNos).allowed) return fail('agreement was not allowed in the replayed state');
+        plot.agreement = agreementRecord(d);
+        agreementNos.push(d.agreement_no);
+        break;
+      case 'AGREEMENT_CANCELLED':
+        if (!plot.agreement || d.agreement_no !== plot.agreement.agreement_no) return fail('no matching sale agreement to cancel');
+        if (!d.reason) return fail('agreement cancelled without a reason');
+        delete plot.agreement;
         break;
       case 'MUTATION_REJECTED':
         if (!activeTx() || tx.reg_status !== 'done') return fail('mutation rejected without a registered deed');
@@ -188,7 +210,7 @@ function replay(ledger) {
         if (d.loan_ref !== plot.mortgage.loan_ref) return fail('released loan does not match the recorded mortgage');
         plot.mortgage = null;
         break;
-      default: // SALE_BLOCKED / MORTGAGE_BLOCKED: audit only, no state change
+      default: // SALE_BLOCKED / MORTGAGE_BLOCKED / AGREEMENT_BLOCKED: audit only, no state change
     }
   }
   return { plots, txs };
@@ -310,4 +332,4 @@ function forPlot(plot_id) {
   else checkpointProblem = 'missing';
 })();
 
-module.exports = { append, verify, forPlot, computeHash, reset, deedRecord };
+module.exports = { append, verify, forPlot, computeHash, reset, deedRecord, agreementRecord, usedAgreementNos };

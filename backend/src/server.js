@@ -11,7 +11,7 @@ const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED } = require('./rules');
+const { checkSale, checkMortgage, checkAgreement, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED } = require('./rules');
 
 const app = express();
 app.use(cors());
@@ -102,6 +102,8 @@ const area = (v) => {
   else return null;
   return Number.isFinite(n) && n > 0 ? n : null;
 };
+// Money (advance in taka): same rule as area, a finite number greater than 0.
+const amount = area;
 // Returns the names of fields whose value failed validation (null).
 const badFields = (values) => Object.entries(values).filter(([, v]) => v === null).map(([k]) => k);
 
@@ -116,6 +118,8 @@ const FIELD_LABEL = {
   owner: { bn: 'বন্ধকদাতা', en: 'mortgagor' },
   bank: { bn: 'ব্যাংক', en: 'bank' },
   loan_ref: { bn: 'ঋণ নং', en: 'loan no.' },
+  agreement_no: { bn: 'বায়নাপত্র নং', en: 'agreement no.' },
+  advance: { bn: 'অগ্রিম টাকা (শূন্যের বেশি সংখ্যা)', en: 'advance amount (a number greater than 0)' },
 };
 function plotNotFound(res) {
   return res.status(404).json({ error: 'Plot not found', code: 'PLOT_NOT_FOUND', bn: 'জমিটি পাওয়া যায়নি।', en: 'Plot not found.' });
@@ -237,6 +241,8 @@ app.post('/api/sale/:id/mutate', guard('sale.mutate'), (req, res) => {
   const plot = findPlot(tx.plot_id);
   plot.current_owner = tx.buyer;
   plot.status = 'Free';
+  // A standing sale agreement is fulfilled: checkSale only lets its own buyer buy the plot.
+  delete plot.agreement;
   tx.mutation_status = 'done';
   tx.mutation_date = new Date().toISOString();
   tx.state = 'completed';
@@ -353,6 +359,56 @@ app.post('/api/mortgage/release', guard('mortgage.release'), (req, res) => {
   db.save();
   ledger.append(plot.id, 'MORTGAGE_RELEASED', { ...released, by_role: req.role });
   res.json({ released });
+});
+
+// ---- Sale agreement (bainapatra) ----
+// The owner takes an advance (bayna) and agrees to sell to one buyer. While it stands, a second
+// agreement, a sale to anyone else and a mortgage are blocked (see rules.js agreementReason).
+app.post('/api/agreement/create', guard('agreement.create'), (req, res) => {
+  const plot_id = plotId(req.body.plot_id);
+  const seller = name(req.body.seller);
+  const buyer = name(req.body.buyer);
+  const agreement_no = ref(req.body.agreement_no);
+  const advance = amount(req.body.advance);
+  const bad = badFields({ plot_id, seller, buyer, agreement_no, advance });
+  if (bad.length) return invalid(res, bad);
+  const plot = findPlot(plot_id);
+  if (!plot) return plotNotFound(res);
+
+  const result = checkAgreement(plot, seller, buyer, agreement_no, ledger.usedAgreementNos(db.get().ledger));
+  if (!result.allowed) {
+    ledger.append(plot.id, 'AGREEMENT_BLOCKED', { seller, buyer, agreement_no, reasons: result.reasons.map((r) => r.code), by_role: req.role });
+    return res.status(409).json({ blocked: true, ...result });
+  }
+  const data = { agreement_no, seller, buyer, advance, date: new Date().toISOString().slice(0, 10) };
+  plot.agreement = ledger.agreementRecord(data);
+  db.save();
+  ledger.append(plot.id, 'AGREEMENT_CREATED', { ...data, by_role: req.role });
+  res.status(201).json({ blocked: false, ...result, agreement: plot.agreement });
+});
+
+// Cancelling needs the agreement number and a reason, so the wrong agreement cannot be cleared by mistake.
+app.post('/api/agreement/cancel', guard('agreement.cancel'), (req, res) => {
+  const plot_id = plotId(req.body.plot_id);
+  const agreement_no = ref(req.body.agreement_no);
+  const reason = note(req.body.reason);
+  const bad = badFields({ plot_id, agreement_no, reason });
+  if (bad.length) return invalid(res, bad);
+  const plot = findPlot(plot_id);
+  if (!plot) return plotNotFound(res);
+  if (!plot.agreement) return res.status(400).json({ error: 'No sale agreement on this plot' });
+  if (norm(agreement_no) !== norm(plot.agreement.agreement_no)) {
+    return res.status(409).json({
+      error: 'Agreement number does not match the sale agreement on this plot', code: 'AGREEMENT_MISMATCH',
+      bn: `বায়নাপত্র নং (${agreement_no}) এই জমির চুক্তির সাথে মিলছে না। চুক্তি বাতিল করা হয়নি।`,
+      en: `Agreement no. (${agreement_no}) does not match the sale agreement on this plot. It was not cancelled.`,
+    });
+  }
+  const cancelled = plot.agreement;
+  delete plot.agreement;
+  db.save();
+  ledger.append(plot.id, 'AGREEMENT_CANCELLED', { agreement_no: cancelled.agreement_no, reason, by_role: req.role });
+  res.json({ cancelled });
 });
 
 // ---- Dashboard: registered deeds waiting for mutation (including disputed ones) ----

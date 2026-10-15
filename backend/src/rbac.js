@@ -10,11 +10,12 @@ const ROLES = {
 const DEFAULT_ROLE = 'buyer'; // least privilege
 
 // Buyer has no write permissions (read-only).
-// Sub-Registrar: sale/deed registration + mortgage deeds (registered at the Sub-Registry office).
+// Sub-Registrar: sale/deed registration, mortgage deeds and sale agreements (bainapatra), all
+// registered at the Sub-Registry office.
 // AC Land Officer: mutation (namjari) only - complete it, or formally reject it (plot becomes Disputed).
 const PERMISSIONS = {
   buyer: [],
-  sub_registrar: ['sale.initiate', 'sale.register', 'sale.cancel', 'mortgage.create', 'mortgage.release'],
+  sub_registrar: ['sale.initiate', 'sale.register', 'sale.cancel', 'mortgage.create', 'mortgage.release', 'agreement.create', 'agreement.cancel'],
   ac_land: ['sale.mutate', 'sale.reject_mutation'],
 };
 
@@ -42,6 +43,9 @@ const EVENT_PERMISSION = {
   MORTGAGE_CREATED: 'mortgage.create',
   MORTGAGE_BLOCKED: 'mortgage.create',
   MORTGAGE_RELEASED: 'mortgage.release',
+  AGREEMENT_CREATED: 'agreement.create',
+  AGREEMENT_BLOCKED: 'agreement.create',
+  AGREEMENT_CANCELLED: 'agreement.cancel',
 };
 
 const can = (role, perm) => Boolean(PERMISSIONS[role] && PERMISSIONS[role].includes(perm));
