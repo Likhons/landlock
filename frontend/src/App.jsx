@@ -388,6 +388,8 @@ export default function App() {
   const [releaseRef, setReleaseRef] = useState('')
   const [recResult, setRecResult] = useState(null)
   const [aform, setAform] = useState({ buyer: '', agreement_no: '', advance: '' })
+  // New-deed desk: which deed type is being written (sale deed, sale agreement, mortgage deed)
+  const [deedTab, setDeedTab] = useState('sale')
   const [aresult, setAresult] = useState(null)
   const [acancel, setAcancel] = useState({ agreement_no: '', reason: '' })
   // DEMO ROLE SWITCH: always starts as the least-privileged Buyer (not saved between visits)
@@ -435,6 +437,20 @@ export default function App() {
       {tr(`${roleLabel(role)} এটি করতে পারবেন না। প্রয়োজন: ${whoCan(perm)}`, `${roleLabel(role)} cannot do this. Requires: ${whoCan(perm)}`)}
     </div>
   )
+  // Switch the demo role (same as clicking a role card), clearing the previous messages
+  const switchRole = (r) => { setRole(r); setResult(null); setMresult(null); setRecResult(null); setAresult(null) }
+  // Deed desk: when the chosen role cannot sign this deed, say who can and offer to switch to them
+  const roleGate = (perm) => {
+    if (can(perm) || !roles) return null
+    const r = Object.keys(roles.roles).find((k) => roles.roles[k].permissions.includes(perm))
+    return (
+      <div className="desk-gate">
+        <Icon name="lock" size={16} />
+        <span>{tr(`এই দলিল শুধু ${whoCan(perm)} নিবন্ধন করতে পারেন। আপনি এখন: ${roleLabel(role)}।`, `Only the ${whoCan(perm)} can register this deed. You are: ${roleLabel(role)}.`)}</span>
+        {r && <button type="button" onClick={() => switchRole(r)}>{tr(`${roleLabel(r)} হিসেবে চালান`, `Act as ${roleLabel(r)}`)}</button>}
+      </div>
+    )
+  }
   const changeLang = (l) => {
     setLang(l)
     try { localStorage.setItem('landlock_lang', l) } catch { /* ignore */ }
@@ -681,7 +697,7 @@ export default function App() {
                     role="radio"
                     aria-checked={role === r}
                     className={`role-card r-${r}${role === r ? ' on' : ''}`}
-                    onClick={() => { setRole(r); setResult(null); setMresult(null); setRecResult(null); setAresult(null) }}
+                    onClick={() => switchRole(r)}
                   >
                     <span className="ri"><Icon name={ROLE_INFO[r].icon} size={22} /></span>
                     <span className="rt">
@@ -986,154 +1002,199 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Sale form */}
-                <div className="card">
-                  <div className="card-head">
-                    <CardTitle icon="file" title={tr('নতুন বিক্রয় শুরু করুন', 'Start a new sale')} sub={tr('বিক্রয়ের তথ্য দিন; জমা দিলে LandLock আগে যাচাই করবে', 'Enter the sale; LandLock checks it before accepting')} />
-                  </div>
-                  <div className="grid2">
-                    <Field label={tr('বিক্রেতা', 'Seller')} req icon="user"><input className="input" value={form.seller} onChange={setField('seller')} /></Field>
-                    <Field label={tr('ক্রেতা', 'Buyer')} req icon="user"><input className="input" value={form.buyer} onChange={setField('buyer')} placeholder={tr('যেমন: Karim', 'e.g. Karim')} /></Field>
-                    <Field label={tr('দলিল নং', 'Deed no.')} req icon="file"><input className="input" value={form.deed_no} onChange={setField('deed_no')} placeholder={tr('যেমন: D-1001', 'e.g. D-1001')} /></Field>
-                    <Field
-                      label={tr('দলিলের পরিমাণ (শতক)', 'Deed area (decimal)')}
-                      req
-                      icon="grid"
-                      hint={tr(`শুধু পুরো জমি (${data.plot.area} শতক) বিক্রয় করা যাবে (প্রোটোটাইপ)`, `Full plot only (${data.plot.area} decimal) in this prototype`)}
-                    >
-                      <input className="input" value={form.deed_area} onChange={setField('deed_area')} inputMode="decimal" />
-                    </Field>
-                  </div>
-                  <div className="actions">
-                    <button className="btn primary" {...gated('sale.initiate')} onClick={submitSale}>
-                      <Icon name="shield" size={16} /> {tr('বিক্রয় যাচাই ও শুরু করুন', 'Verify and start sale')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
-                    </button>
-                  </div>
-                  {needs('sale.initiate')}
-
-                  {result && result.body.blocked && (
-                    <BlockedBox title={tr('বিক্রয় আটকানো হয়েছে (Blocked)', 'Sale blocked')} reasons={result.body.reasons} lang={lang} />
-                  )}
-                  {result && result.body.blocked === false && (
-                    <div className="alert success">
-                      <div className="alert-title"><Icon name="check" /> {tr('বিক্রয় গৃহীত হয়েছে। জমিটি এখন Pending (লক) অবস্থায় আছে।', 'Sale accepted. The plot is now Pending (locked).')}</div>
-                      {result.body.checks && (
-                        <>
-                          <div style={{ marginTop: 6 }}>{tr('যে যাচাইগুলো সফল হয়েছে:', 'Checks that passed:')}</div>
-                          <ul>{result.body.checks.map((ch) => <li key={ch.code}><Icon name="check" size={15} /> {ch[lang]}</li>)}</ul>
-                        </>
-                      )}
-                      {result.body.not_checked && (
-                        <div className="sub">
-                          {tr('এই প্রোটোটাইপ যা যাচাই করে না:', 'Not checked by this prototype:')}
-                          <ul>{result.body.not_checked.map((n) => <li key={n.code}><Icon name="info" size={14} /> {n[lang]}</li>)}</ul>
-                        </div>
-                      )}
+                {/* New-deed desk: the three deeds the Sub-Registry office writes for a plot, as one
+                    stamp-paper sheet with a tab per deed type: parties, then the schedule of the
+                    land (tofsil, from the khatian), then the deed's own details. */}
+                {(() => {
+                  const plot = data.plot
+                  const DEEDS = [
+                    { id: 'sale', icon: 'file', bn: 'সাফ কবলা', en: 'Sale deed', subBn: 'বিক্রয় দলিল', subEn: 'Saf kabala', flag: tx ? tr('চলছে', 'in progress') : null },
+                    { id: 'agreement', icon: 'deed', bn: 'বায়নাপত্র', en: 'Sale agreement', subBn: 'অগ্রিম নিয়ে চুক্তি', subEn: 'Bainapatra', flag: plot.agreement ? tr('চুক্তি আছে', 'active') : null },
+                    { id: 'mortgage', icon: 'bank', bn: 'বন্ধকী দলিল', en: 'Mortgage deed', subBn: 'ব্যাংক ঋণ', subEn: 'Bank loan', flag: plot.mortgage ? tr('বন্ধক আছে', 'mortgaged') : null },
+                  ]
+                  const d = DEEDS.find((x) => x.id === deedTab) || DEEDS[0]
+                  const party = (labelBn, labelEn, control) => (
+                    <div className="dk-party">
+                      <span className="dk-plabel">{tr(labelBn, labelEn)}</span>
+                      {control}
                     </div>
-                  )}
-                  {result && result.body.error && result.src !== 'tx' && <ErrorBox body={result.body} lang={lang} />}
-                </div>
+                  )
+                  const parties = (from, to) => (
+                    <div className="dk-parties">
+                      {from}
+                      <span className="dk-arrow" aria-hidden="true"><Icon name="arrow" size={18} /></span>
+                      {to}
+                    </div>
+                  )
+                  const input = (value, onChange, placeholder, extra) => (
+                    <input className="input" value={value} onChange={onChange} placeholder={placeholder} {...extra} />
+                  )
+                  return (
+                    <div className={`card desk deed-${d.id}`}>
+                      <div className="dk-tabs" role="tablist" aria-label={tr('দলিলের ধরন', 'Deed type')}>
+                        {DEEDS.map((x) => (
+                          <button key={x.id} type="button" role="tab" aria-selected={x.id === d.id} className={`dk-tab t-${x.id}${x.id === d.id ? ' on' : ''}`} onClick={() => setDeedTab(x.id)}>
+                            <span className="dk-tab-ico"><Icon name={x.icon} size={18} /></span>
+                            <span className="dk-tab-tx"><b>{tr(x.bn, x.en)}</b><span>{tr(x.subBn, x.subEn)}</span></span>
+                            {x.flag && <span className="dk-flag">{x.flag}</span>}
+                          </button>
+                        ))}
+                      </div>
 
-                {/* Bank mortgage */}
-                <div className="card">
-                  <div className="card-head">
-                    <CardTitle icon="bank" title={tr('ব্যাংক বন্ধক', 'Bank mortgage')} sub={tr('ব্যাংক ঋণের বিপরীতে জমি বন্ধক রাখা (যদি থাকে)', 'Pledging the plot against a bank loan (if any)')} />
-                    {data.plot.mortgage
-                      ? <span className="badge amber">{tr('বন্ধক আছে', 'Mortgaged')}</span>
-                      : <span className="badge green">{tr('বন্ধক নেই', 'No mortgage')}</span>}
-                  </div>
-                  {data.plot.mortgage && (
-                    <>
-                      <div>
-                        {tr(
-                          <>এই জমি <b>{data.plot.mortgage.bank}</b>-এ বন্ধক আছে।</>,
-                          <>This plot is mortgaged to <b>{data.plot.mortgage.bank}</b>.</>,
+                      <div className="dk-sheet" role="tabpanel">
+                        <div className="dk-head">
+                          <div>
+                            <div className="dk-kicker">{tr('নতুন দলিল', 'New deed')} · {tr('সাব-রেজিস্ট্রি অফিস', 'Sub-Registry office')}</div>
+                            <h3 className="dk-title">{tr(d.bn, d.en)}</h3>
+                          </div>
+                          <span className="dk-seal" aria-hidden="true"><Icon name={d.icon} size={22} /></span>
+                        </div>
+
+                        <div className="dk-tofsil">
+                          <span className="dk-sec">{tr('তফসিল', 'Schedule')}</span>
+                          <span><i>{tr('মৌজা', 'Mouza')}</i> {plot.mouza}</span>
+                          <span><i>{tr('খতিয়ান', 'Khatian')}</i> {plot.khatian_no}</span>
+                          <span><i>{tr('দাগ', 'Dag')}</i> {plot.dag_no}</span>
+                          <span><i>{tr('পরিমাণ', 'Area')}</i> {plot.area} {tr('শতক', 'decimal')}</span>
+                        </div>
+
+                        {d.id === 'sale' && (
+                          <>
+                            {tx && <div className="dk-note"><Icon name="lock" size={15} /> {tr(`এই জমিতে একটি বিক্রয় চলছে (${tx.seller} → ${tx.buyer})। নতুন বিক্রয় চেষ্টা করলে LandLock আটকাবে।`, `A sale is already in progress here (${tx.seller} → ${tx.buyer}). A new sale will be blocked by LandLock.`)}</div>}
+                            <span className="dk-sec">{tr('পক্ষগণ', 'Parties')}</span>
+                            {parties(
+                              party('দাতা (বিক্রেতা)', 'Seller', input(form.seller, setField('seller'))),
+                              party('গ্রহীতা (ক্রেতা)', 'Buyer', input(form.buyer, setField('buyer'), tr('যেমন: Karim', 'e.g. Karim'))),
+                            )}
+                            <span className="dk-sec">{tr('দলিলের তথ্য', 'Deed details')}</span>
+                            <div className="grid2">
+                              <Field label={tr('দলিল নং', 'Deed no.')} req icon="file">{input(form.deed_no, setField('deed_no'), tr('যেমন: D-1001', 'e.g. D-1001'))}</Field>
+                              <Field label={tr('দলিলের পরিমাণ (শতক)', 'Deed area (decimal)')} req icon="grid" hint={tr(`শুধু পুরো জমি (${plot.area} শতক), প্রোটোটাইপ`, `Full plot only (${plot.area} decimal) in this prototype`)}>
+                                {input(form.deed_area, setField('deed_area'), '', { inputMode: 'decimal' })}
+                              </Field>
+                            </div>
+                            {roleGate('sale.initiate')}
+                            <div className="dk-foot">
+                              <button className="btn primary dk-go" {...gated('sale.initiate')} onClick={submitSale}>
+                                <Icon name="shield" size={16} /> {tr('যাচাই করে বিক্রয় শুরু করুন', 'Verify and start the sale')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
+                              </button>
+                              <span className="dk-hint">{tr('গৃহীত হলে জমিটি সঙ্গে সঙ্গে লক হবে।', 'Once accepted, the plot locks at once.')}</span>
+                            </div>
+                            {result && result.body.blocked && (
+                              <BlockedBox title={tr('বিক্রয় আটকানো হয়েছে (Blocked)', 'Sale blocked')} reasons={result.body.reasons} lang={lang} />
+                            )}
+                            {result && result.body.blocked === false && (
+                              <div className="alert success">
+                                <div className="alert-title"><Icon name="check" /> {tr('বিক্রয় গৃহীত হয়েছে। জমিটি এখন Pending (লক) অবস্থায় আছে।', 'Sale accepted. The plot is now Pending (locked).')}</div>
+                                {result.body.checks && (
+                                  <>
+                                    <div style={{ marginTop: 6 }}>{tr('যে যাচাইগুলো সফল হয়েছে:', 'Checks that passed:')}</div>
+                                    <ul>{result.body.checks.map((ch) => <li key={ch.code}><Icon name="check" size={15} /> {ch[lang]}</li>)}</ul>
+                                  </>
+                                )}
+                                {result.body.not_checked && (
+                                  <div className="sub">
+                                    {tr('এই প্রোটোটাইপ যা যাচাই করে না:', 'Not checked by this prototype:')}
+                                    <ul>{result.body.not_checked.map((n) => <li key={n.code}><Icon name="info" size={14} /> {n[lang]}</li>)}</ul>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {result && result.body.error && result.src !== 'tx' && <ErrorBox body={result.body} lang={lang} />}
+                          </>
+                        )}
+
+                        {d.id === 'agreement' && (plot.agreement ? (
+                          <>
+                            <div className="dk-standing">
+                              <span className="dk-sec">{tr('চলমান বায়নাপত্র', 'Agreement in force')}</span>
+                              <div className="party">{plot.agreement.seller} <span className="arrow"><Icon name="arrow" /></span> {plot.agreement.buyer}</div>
+                              <div className="meta">{tr('নং', 'No.')} {plot.agreement.agreement_no} · {tr('অগ্রিম', 'Advance')} {taka(plot.agreement.advance)} · {plot.agreement.date}</div>
+                              <div className="dk-note"><Icon name="info" size={15} /> {tr(`শুধু ${plot.agreement.buyer}-এর কাছে বিক্রয় করা যাবে; অন্য কাউকে বিক্রয়, দ্বিতীয় বায়না বা বন্ধক আটকানো। নামজারি হলে চুক্তি পূরণ হবে।`, `Only ${plot.agreement.buyer} can buy this plot; a sale to anyone else, a second advance and a mortgage are blocked. The mutation fulfils it.`)}</div>
+                            </div>
+                            <span className="dk-sec">{tr('চুক্তি বাতিল', 'Cancel the agreement')}</span>
+                            <div className="grid2">
+                              <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file">{input(acancel.agreement_no, (e) => setAcancel({ ...acancel, agreement_no: e.target.value }), tr('যেমন: B-501/2026', 'e.g. B-501/2026'))}</Field>
+                              <Field label={tr('বাতিলের কারণ', 'Reason for cancelling')} req icon="info">{input(acancel.reason, (e) => setAcancel({ ...acancel, reason: e.target.value }), tr('যেমন: অগ্রিম ফেরত দেওয়া হয়েছে', 'e.g. advance returned'))}</Field>
+                            </div>
+                            {roleGate('agreement.cancel')}
+                            <div className="dk-foot">
+                              <button className="btn ghost" {...gated('agreement.cancel')} onClick={cancelAgreement}>{tr('বায়নাপত্র বাতিল করুন', 'Cancel agreement')}</button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <span className="dk-sec">{tr('পক্ষগণ', 'Parties')}</span>
+                            {parties(
+                              party('বিক্রেতা (মালিক)', 'Seller (owner)', <div className="dk-fixed"><Icon name="user" size={16} /> {plot.current_owner}</div>),
+                              party('ক্রেতা (অগ্রিম দিচ্ছেন)', 'Buyer (paying the advance)', input(aform.buyer, (e) => setAform({ ...aform, buyer: e.target.value }), tr('যেমন: Tania', 'e.g. Tania'))),
+                            )}
+                            <span className="dk-sec">{tr('চুক্তির তথ্য', 'Agreement details')}</span>
+                            <div className="grid2">
+                              <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file">{input(aform.agreement_no, (e) => setAform({ ...aform, agreement_no: e.target.value }), tr('যেমন: B-501/2026', 'e.g. B-501/2026'))}</Field>
+                              <Field label={tr('অগ্রিম (টাকা)', 'Advance (taka)')} req icon="bank" hint={Number(aform.advance) > 0 ? `= ${taka(aform.advance)}` : undefined}>
+                                {input(aform.advance, (e) => setAform({ ...aform, advance: e.target.value }), '500000', { inputMode: 'decimal' })}
+                              </Field>
+                            </div>
+                            {roleGate('agreement.create')}
+                            <div className="dk-foot">
+                              <button className="btn primary dk-go" {...gated('agreement.create')} onClick={submitAgreement}>
+                                <Icon name="shield" size={16} /> {tr('যাচাই করে বায়নাপত্র নিবন্ধন', 'Verify and register the agreement')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
+                              </button>
+                              <span className="dk-hint">{tr('একই জমিতে দ্বিতীয় বায়না নেওয়া যাবে না।', 'A second advance on this plot will be blocked.')}</span>
+                            </div>
+                          </>
+                        ))}
+                        {d.id === 'agreement' && aresult && aresult.body.blocked && (
+                          <BlockedBox title={tr('বায়নাপত্র আটকানো হয়েছে (Blocked)', 'Sale agreement blocked')} reasons={aresult.body.reasons} lang={lang} />
+                        )}
+                        {d.id === 'agreement' && aresult && aresult.body.blocked === false && (
+                          <div className="alert success"><div className="alert-title"><Icon name="check" /> {tr('বায়নাপত্র নিবন্ধিত হয়েছে। এখন অন্য কারো কাছে বিক্রয় বা বন্ধক আটকানো থাকবে।', 'Sale agreement registered. Sale to anyone else and mortgage are now blocked.')}</div></div>
+                        )}
+                        {d.id === 'agreement' && aresult && aresult.body.error && <ErrorBox body={aresult.body} lang={lang} />}
+
+                        {d.id === 'mortgage' && (
+                          <>
+                            {plot.mortgage && (
+                              <div className="dk-standing">
+                                <span className="dk-sec">{tr('চলমান বন্ধক', 'Mortgage in force')}</span>
+                                <div className="party"><Icon name="bank" /> {plot.mortgage.bank}</div>
+                                <div className="meta">{tr('ঋণ নং', 'Loan no.')} {plot.mortgage.loan_ref}</div>
+                                <div className="dk-release">
+                                  <Field label={tr('যে ঋণ মুক্ত হবে তার নং', 'Loan no. being released')} icon="file">{input(releaseRef, (e) => setReleaseRef(e.target.value), tr('যেমন: LN-101', 'e.g. LN-101'))}</Field>
+                                  <button className="btn ghost" {...gated('mortgage.release')} onClick={releaseMortgage}>{tr('বন্ধক মুক্ত করুন', 'Release mortgage')}</button>
+                                </div>
+                              </div>
+                            )}
+                            <span className="dk-sec">{tr('পক্ষগণ', 'Parties')}</span>
+                            {parties(
+                              party('বন্ধকদাতা (মালিক)', 'Mortgagor (owner)', input(mform.owner, (e) => setMform({ ...mform, owner: e.target.value }), plot.current_owner)),
+                              party('বন্ধকগ্রহীতা (ব্যাংক)', 'Mortgagee (bank)', input(mform.bank, (e) => setMform({ ...mform, bank: e.target.value }), tr('যেমন: Sonali Bank', 'e.g. Sonali Bank'))),
+                            )}
+                            <span className="dk-sec">{tr('ঋণের তথ্য', 'Loan details')}</span>
+                            <div className="grid2">
+                              <Field label={tr('ঋণ নং', 'Loan no.')} req icon="file">{input(mform.loan_ref, (e) => setMform({ ...mform, loan_ref: e.target.value }), tr('যেমন: LN-101', 'e.g. LN-101'))}</Field>
+                            </div>
+                            {roleGate('mortgage.create')}
+                            <div className="dk-foot">
+                              <button className="btn primary dk-go" {...gated('mortgage.create')} onClick={submitMortgage}>
+                                <Icon name="bank" size={16} /> {tr('যাচাই করে বন্ধক নিবন্ধন', 'Verify and register the mortgage')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
+                              </button>
+                              <span className="dk-hint">{tr('একই জমিতে দ্বিতীয় বন্ধক আটকানো হবে।', 'A second mortgage on this plot will be blocked.')}</span>
+                            </div>
+                            {mresult && mresult.body.blocked && (
+                              <BlockedBox title={tr('বন্ধক আটকানো হয়েছে (Blocked)', 'Mortgage blocked')} reasons={mresult.body.reasons} lang={lang} />
+                            )}
+                            {mresult && mresult.body.blocked === false && (
+                              <div className="alert success"><div className="alert-title"><Icon name="check" /> {tr('বন্ধক নিবন্ধিত হয়েছে।', 'Mortgage registered.')}</div></div>
+                            )}
+                            {mresult && mresult.body.error && <ErrorBox body={mresult.body} lang={lang} />}
+                          </>
                         )}
                       </div>
-                      <div className="inline">
-                        <label className="field">
-                          {tr('যে ঋণ মুক্ত হবে তার নং', 'Loan no. being released')}
-                          <input className="input" value={releaseRef} onChange={(e) => setReleaseRef(e.target.value)} placeholder="e.g. LN-101" />
-                        </label>
-                        <button className="btn ghost" {...gated('mortgage.release')} onClick={releaseMortgage}>{tr('বন্ধক মুক্ত করুন', 'Release mortgage')}</button>
-                      </div>
-                    </>
-                  )}
-                  <div className="grid3" style={{ marginTop: data.plot.mortgage ? 14 : 0 }}>
-                    <Field label={tr('বন্ধকদাতা', 'Mortgagor')} req icon="user"><input className="input" value={mform.owner} onChange={(e) => setMform({ ...mform, owner: e.target.value })} placeholder={data.plot.current_owner} /></Field>
-                    <Field label={tr('ব্যাংক', 'Bank')} req icon="bank"><input className="input" value={mform.bank} onChange={(e) => setMform({ ...mform, bank: e.target.value })} placeholder={tr('যেমন: Sonali Bank', 'e.g. Sonali Bank')} /></Field>
-                    <Field label={tr('ঋণ নং', 'Loan no.')} req icon="file"><input className="input" value={mform.loan_ref} onChange={(e) => setMform({ ...mform, loan_ref: e.target.value })} placeholder={tr('যেমন: LN-101', 'e.g. LN-101')} /></Field>
-                  </div>
-                  <div className="actions">
-                    <button className="btn primary" {...gated('mortgage.create')} onClick={submitMortgage}>
-                      <Icon name="bank" size={16} /> {tr('বন্ধক যাচাই ও নিবন্ধন করুন', 'Verify and register mortgage')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
-                    </button>
-                  </div>
-                  {needs('mortgage.create')}
-
-                  {mresult && mresult.body.blocked && (
-                    <BlockedBox title={tr('বন্ধক আটকানো হয়েছে (Blocked)', 'Mortgage blocked')} reasons={mresult.body.reasons} lang={lang} />
-                  )}
-                  {mresult && mresult.body.blocked === false && (
-                    <div className="alert success"><div className="alert-title"><Icon name="check" /> {tr('বন্ধক নিবন্ধিত হয়েছে।', 'Mortgage registered.')}</div></div>
-                  )}
-                  {mresult && mresult.body.error && <ErrorBox body={mresult.body} lang={lang} />}
-                </div>
-
-                {/* Sale agreement (bainapatra): one advance per plot */}
-                <div className="card">
-                  <div className="card-head">
-                    <CardTitle icon="file" title={tr('বায়নাপত্র (বিক্রয় চুক্তি)', 'Sale agreement (bainapatra)')} sub={tr('অগ্রিম নিয়ে বিক্রয়ের চুক্তি; একই জমিতে দ্বিতীয় বায়না আটকানো হয়', 'An advance paid to agree a sale; a second advance on the same plot is blocked')} />
-                    {data.plot.agreement
-                      ? <span className="badge amber"><Icon name="lock" size={13} /> {tr('চুক্তি আছে', 'Agreement active')}</span>
-                      : <span className="badge green">{tr('চুক্তি নেই', 'No agreement')}</span>}
-                  </div>
-                  {data.plot.agreement ? (
-                    <>
-                      <div className="party">{data.plot.agreement.seller} <span className="arrow"><Icon name="arrow" /></span> {data.plot.agreement.buyer}</div>
-                      <div className="meta">
-                        {tr('বায়নাপত্র নং', 'Agreement no.')}: {data.plot.agreement.agreement_no} · {tr('অগ্রিম', 'Advance')} {taka(data.plot.agreement.advance)} · {data.plot.agreement.date}
-                      </div>
-                      <div className="alert info">
-                        <Icon name="info" size={15} />{' '}
-                        {tr(
-                          `শুধু ${data.plot.agreement.buyer}-এর কাছে বিক্রয় করা যাবে। নামজারি হলে চুক্তি পূরণ হয়ে যাবে।`,
-                          `Only ${data.plot.agreement.buyer} can buy this plot. The agreement is fulfilled when the mutation is done.`,
-                        )}
-                      </div>
-                      <div className="grid2">
-                        <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file"><input className="input" value={acancel.agreement_no} onChange={(e) => setAcancel({ ...acancel, agreement_no: e.target.value })} placeholder={data.plot.agreement.agreement_no} /></Field>
-                        <Field label={tr('বাতিলের কারণ', 'Reason for cancelling')} req icon="info"><input className="input" value={acancel.reason} onChange={(e) => setAcancel({ ...acancel, reason: e.target.value })} placeholder={tr('যেমন: অগ্রিম ফেরত দেওয়া হয়েছে', 'e.g. advance returned')} /></Field>
-                      </div>
-                      <div className="actions">
-                        <button className="btn ghost" {...gated('agreement.cancel')} onClick={cancelAgreement}>{tr('বায়নাপত্র বাতিল', 'Cancel agreement')}</button>
-                      </div>
-                      {needs('agreement.cancel')}
-                    </>
-                  ) : (
-                    <>
-                      <div className="grid3">
-                        <Field label={tr('ক্রেতা', 'Buyer')} req icon="user"><input className="input" value={aform.buyer} onChange={(e) => setAform({ ...aform, buyer: e.target.value })} placeholder={tr('যেমন: Tania', 'e.g. Tania')} /></Field>
-                        <Field label={tr('বায়নাপত্র নং', 'Agreement no.')} req icon="file"><input className="input" value={aform.agreement_no} onChange={(e) => setAform({ ...aform, agreement_no: e.target.value })} placeholder={tr('যেমন: B-501/2026', 'e.g. B-501/2026')} /></Field>
-                        <Field label={tr('অগ্রিম (টাকা)', 'Advance (taka)')} req icon="bank"><input className="input" value={aform.advance} onChange={(e) => setAform({ ...aform, advance: e.target.value })} inputMode="decimal" placeholder="500000" /></Field>
-                      </div>
-                      <div className="fineprint"><Icon name="info" size={14} /> {tr(`বিক্রেতা: বর্তমান মালিক ${data.plot.current_owner}`, `Seller: the current owner, ${data.plot.current_owner}`)}</div>
-                      <div className="actions">
-                        <button className="btn primary" {...gated('agreement.create')} onClick={submitAgreement}>
-                          <Icon name="shield" size={16} /> {tr('বায়নাপত্র যাচাই ও নিবন্ধন করুন', 'Verify and register agreement')} <span className="btn-arr"><Icon name="arrow" size={16} /></span>
-                        </button>
-                      </div>
-                      {needs('agreement.create')}
-                    </>
-                  )}
-                  {aresult && aresult.body.blocked && (
-                    <BlockedBox title={tr('বায়নাপত্র আটকানো হয়েছে (Blocked)', 'Sale agreement blocked')} reasons={aresult.body.reasons} lang={lang} />
-                  )}
-                  {aresult && aresult.body.blocked === false && (
-                    <div className="alert success"><div className="alert-title"><Icon name="check" /> {tr('বায়নাপত্র নিবন্ধিত হয়েছে। এখন অন্য কারো কাছে বিক্রয় বা বন্ধক আটকানো থাকবে।', 'Sale agreement registered. Sale to anyone else and mortgage are now blocked.')}</div></div>
-                  )}
-                  {aresult && aresult.body.error && <ErrorBox body={aresult.body} lang={lang} />}
-                </div>
+                    </div>
+                  )
+                })()}
             </div>
 
             <h2 className="sec-label"><span className="sec-n">3</span> {tr('প্রমাণ', 'Evidence')}</h2>
