@@ -80,7 +80,6 @@ export default function DemoLab({ chain, entries, lang, Icon, onRun, onReset }) 
         <span className="lab-ico" aria-hidden="true"><Icon name="zap" size={18} /></span>
         <span className="lab-title">
           {tr('জালিয়াতির পরীক্ষা', 'Forgery test bench')}
-          <span className="lab-sub">{tr('ডেমো · কেউ সরাসরি ডেটাবেস বদলালে কী হয়', 'Demo · what happens when someone edits the database directly')}</span>
         </span>
         {chain && (
           <span className={`lab-state ${broken ? 'bad' : 'ok'}`}>
@@ -91,9 +90,6 @@ export default function DemoLab({ chain, entries, lang, Icon, onRun, onReset }) 
       </summary>
 
       <div className="lab-body">
-        <p className="lab-lede">
-          {tr('যেকোনো একটি আক্রমণ চালান, তারপর দেখুন রেজিস্ট্রির কোন পাহারা সেটা ধরে।', 'Run any attack, then see which of the registry’s protections catches it.')}
-        </p>
         <ol className="lab-list">
           {ATTACKS.map((a, i) => {
             const why = blockedWhy(a)
