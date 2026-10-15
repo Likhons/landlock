@@ -32,7 +32,7 @@ There is no Vite proxy: the browser calls the backend directly (the backend allo
 - **Survey history** CS → SA → RS → BS with unexplained changes highlighted (sample data).
 - **Sale in progress / Disputed** cards, **Start a new sale**, **Bank mortgage** and **Sale agreement (bainapatra)** forms. An accepted sale lists the checks that passed and what is not checked.
 - **History (Ledger)** with hashes, signatures and the acting role, plus the **Registered but not mutated** list.
-- **Demo tools** (tamper, smart tamper, delete last entry, change owner directly, reset): shown only when the backend runs with `npm run demo`.
+- **Forgery test bench** (`DemoLab.jsx`): four attacks (edit an old entry, smart forger, delete the newest entry, change an owner directly), each with the protection that should catch it; after a run it shows which check caught it and at which entry, plus Reset. Shown only when the backend runs with `npm run demo`.
 
 ## Structure
 `src/App.jsx` holds the page and most components; `PlotMap.jsx` (mouza map), `LedgerChain.jsx` (ledger vault), `SideNav.jsx` (sidebar) and `Logo.jsx` are split out; `index.css` is the design system; `src/main.jsx` mounts it.

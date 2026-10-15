@@ -3,6 +3,7 @@ import { Logo, LogoMark } from './Logo.jsx'
 import PlotMap from './PlotMap.jsx'
 import SideNav from './SideNav.jsx'
 import PlotSwitcher from './PlotSwitcher.jsx'
+import DemoLab from './DemoLab.jsx'
 import { drawer, useDrawerOpen } from './navStore.js'
 import LedgerChain, { LedgerChecks, LedgerSeal } from './LedgerChain.jsx'
 
@@ -486,23 +487,11 @@ export default function App() {
 
   const setField = (k) => (e) => setForm({ ...form, [k]: e.target.value })
 
-  const tamper = async () => {
-    const res = await post('/dev/tamper')
-    if (res.status >= 400) setResult({ status: res.status, body: { error: res.body.error } })
+  // Demo attacker simulations (demo mode only); DemoLab shows the outcome
+  const runAttack = async (path, body) => {
+    const res = await post(path, body)
     await load(selectedId)
-  }
-
-  const smartTamper = async () => {
-    const res = await post('/dev/tamper-smart')
-    if (res.status >= 400) setResult({ status: res.status, body: { error: res.body.error } })
-    await load(selectedId)
-  }
-
-  // More attacker simulations (delete tail, change owner directly, ...)
-  const attack = async (type) => {
-    const res = await post('/dev/attack', { type })
-    if (res.status >= 400) setResult({ status: res.status, body: { error: res.body.error } })
-    await load(selectedId)
+    return res
   }
 
   const submitMortgage = async () => {
@@ -820,24 +809,7 @@ export default function App() {
 
         {/* Demo tools exist only when the backend runs in demo mode (npm run demo); the server enforces it */}
         {demoMode ? (
-          <details className="demo">
-            <summary>
-              <Icon name="zap" /> {tr('ডেমো অ্যাটাকার প্যানেল', 'Demo attacker panel')}
-              <span className="badge" style={{ marginLeft: 6 }}>demo</span>
-              <span className="chev"><Icon name="chevron" /></span>
-            </summary>
-            <div className="body">
-              <p>{tr('কেউ সরাসরি ডেটাবেস বদলালে LandLock কীভাবে ধরে, তা দেখুন। Reset সব আগের মতো করে দেয়।', 'See how LandLock catches someone editing the database directly. Reset restores everything.')}</p>
-              <div className="actions" style={{ marginTop: 0 }}>
-                <button className="btn attack sm" onClick={tamper}>⚠️ {tr('Record tamper করুন (demo)', 'Tamper a record (demo)')}</button>
-                <button className="btn attack sm" onClick={smartTamper}>🕵️ {tr('Smart tamper (hash নতুন করে বানাবে)', 'Smart tamper (recomputes hashes)')}</button>
-                <button className="btn attack sm" onClick={() => attack('truncate_tail')}>✂️ {tr('শেষ এন্ট্রি মুছুন (demo)', 'Delete last entry (demo)')}</button>
-                <button className="btn attack sm" onClick={() => attack('owner_change')}>👤 {tr('P1-এর মালিক সরাসরি বদলান (demo)', 'Change P1 owner directly (demo)')}</button>
-                <button className="btn reset sm" onClick={reset}><Icon name="refresh" size={15} /> Reset (demo)</button>
-              </div>
-              {result && result.body.error && !result.body.code && result.src !== 'tx' && <ErrorBox body={result.body} lang={lang} />}
-            </div>
-          </details>
+          <DemoLab chain={chain} entries={entries} lang={lang} Icon={Icon} onRun={runAttack} onReset={reset} />
         ) : (
           <div className="demo-off">
             <Icon name="info" size={15} />
@@ -1049,7 +1021,7 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  {result && result.body.error && result.src !== 'tx' && (result.body.code || !demoMode) && <ErrorBox body={result.body} lang={lang} />}
+                  {result && result.body.error && result.src !== 'tx' && <ErrorBox body={result.body} lang={lang} />}
                 </div>
 
                 {/* Bank mortgage */}

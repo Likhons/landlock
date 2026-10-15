@@ -187,7 +187,7 @@ Remove-Item Env:NODE_ENV; Remove-Item Env:LANDLOCK_DEMO_MODE
 2. Try a second sale on P1 → **blocked: a sale is already in progress**.
 3. **Mark deed registered**: Cancel disappears; the plot shows Yellow "registered but not mutated".
 4. **AC Land Officer:** complete the mutation → Karim owns P1, plot unlocked. (Or reject it with a reason → **Disputed**, Red.)
-5. Click **Change P1 owner directly (demo)** → the banner turns red ("records do not match the ledger") and any new sale is refused. **Reset (demo)** restores everything.
+5. Open the **Forgery test bench** and run **Change an owner directly** → it is stamped *Caught* by *Ledger replay*, the banner turns red ("records do not match the ledger") and any new sale is refused. Each attack shows which protection should catch it (hash chain, digital signature, signed checkpoint, replay). **Restore the records** (Reset) puts everything back.
 6. Switch to **Buyer**: everything is read-only; with "Enable blocked buttons" the server answers ⛔ Permission denied.
 7. **Bainapatra (P5):** as Sub-Registrar register a sale agreement Nasrin → Tania (B-501/2026, advance 500000). Try a second agreement to Babul → **blocked: a second advance cannot be taken**. Try a sale to Babul → blocked; a sale to Tania goes through.
 8. **Deed vs khatian (P6):** the deed 1450/2019 says Monir sold to Shapla, but the khatian still shows Monir → Red. As Sub-Registrar try selling P6 as Monir → **blocked**. As **AC Land Officer** click *Complete mutation for deed 1450/2019* → owner Shapla, Green, records agree. **P7** shows an area mismatch (deed 14 vs khatian 18 decimal) as a Yellow warning.
@@ -242,7 +242,7 @@ Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, M
 | "another LandLock server (PID …) is already using this data folder" | Stop the other backend window. If none is running, delete `backend\data\data.json.lock`. |
 | "signing key file keys.json is missing, but signed ledger data already exists" | Restore your original `backend\data\keys.json`. To start completely fresh instead, move the whole `backend\data` folder somewhere else and start again. |
 | "data.json is not valid JSON" | Restore it from a backup, or move it aside to start again from the sample data. |
-| Red banner "Ledger check failed" / writes return 423 | Expected after using a demo attack. Click **Reset (demo)** (demo mode), or stop the server and move the `backend\data` folder aside. |
+| Red banner "Ledger check failed" / writes return 423 | Expected after using a demo attack. Click **Restore the records** / **Reset** in the Forgery test bench (demo mode), or stop the server and move the `backend\data` folder aside. |
 | Demo buttons are missing | The backend is running without demo mode; restart it with `npm run demo`. |
 | A button is greyed out / "Permission denied" | Choose the right role in the DEMO ROLE SWITCH (e.g. AC Land Officer for mutation). |
 | Port 4100 busy when running tests | Stop whatever uses it, or run `$env:TEST_PORT=4200; npm test`. |
