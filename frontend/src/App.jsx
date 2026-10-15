@@ -1,9 +1,10 @@
-import { Fragment, Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, Suspense, lazy, startTransition, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Logo, LogoMark } from './Logo.jsx'
 import PlotMap from './PlotMap.jsx'
 import SideNav from './SideNav.jsx'
 import PlotSwitcher from './PlotSwitcher.jsx'
 import DemoLab from './DemoLab.jsx'
+import LangSwitch from './LangSwitch.jsx'
 import { EVENT_LABEL, API } from './labels.js'
 import { drawer, sidebarMini, useDrawerOpen } from './navStore.js'
 import LedgerChain, { LedgerChecks, LedgerSeal } from './LedgerChain.jsx'
@@ -484,8 +485,10 @@ export default function App() {
       </div>
     )
   }
+  // The whole page re-renders in the new language as a transition, so the switch itself (its own
+  // state) responds at once and the heavy re-render never blocks that first paint
   const changeLang = (l) => {
-    setLang(l)
+    startTransition(() => setLang(l))
     try { localStorage.setItem('landlock_lang', l) } catch { /* ignore */ }
   }
 
@@ -679,12 +682,7 @@ export default function App() {
                 </span>
               </span>
             )}
-            <div className="seg">
-              <button className={lang === 'bn' ? 'on' : ''} onClick={() => changeLang('bn')}>বাংলা</button>
-              <button className={lang === 'en' ? 'on' : ''} onClick={() => changeLang('en')} aria-label="English">
-                <span className="long">English</span><span className="short">EN</span>
-              </button>
-            </div>
+            <LangSwitch lang={lang} onChange={changeLang} />
           </div>
         </div>
       </header>
