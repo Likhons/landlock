@@ -1,11 +1,28 @@
 # 🔒 LandLock — One Land. One Owner.
 
-**Bangladesh LandTech Hackathon · Track: Digital Land Records, Verification & Digitization**
+**LandTech 2026 — LandTech Innovation Hackathon (Daffodil International University) · Track: Digital Land Records, Verification & Digitization**
 **Problem statement: P3 — Catch Fraud & Double-Selling**
+
+**Live demo:** https://landlock-flame.vercel.app · **API:** https://likhonsapi-landlock-lands.onrender.com/api
+<br>The API runs on a free plan: the first request after a quiet period can take 30–50 seconds, and the demo data resets on every deploy.
+
+| Team | |
+|---|---|
+| Md. Wazid Hasan Likhon (team leader) | 0242310005101218 · CSE |
+| Md. Zobayer Amin | 0242310005101065 · CSE |
+| Faculty mentor | Md. Jubayar Alam Rafi, Lecturer, CSE |
+| Industry support mentor | Rahat Shahriar Reyad, CSE-TECH |
 
 LandLock is a working prototype that locks a plot the moment a sale starts, blocks a second sale or mortgage on the same land, flags gaps between deed registration and mutation (namjari), and keeps a tamper-evident, digitally signed history of every land event. Every decision is explained in plain Bangla and English.
 
 > **Prototype with synthetic data only.** All plots, owners, khatian/dag numbers, loans and survey records are invented. LandLock is not connected to any government system and does not provide legal verification of ownership.
+
+### Quick look (live site, about 2 minutes)
+1. Open https://landlock-flame.vercel.app (switch to **English** at the top right if you like) and pick plot **P1** on the map. The khatian card shows the owner, father's name and masked NID; the result is Green.
+2. In section **2 · Actions** (the *Sale deed* tab), click **Act as Sub-Registrar**. Type a buyer and a deed number, then change the seller's NID and press **Verify and start the sale** → **blocked**: same name, different person.
+3. Put the NID back and submit → **accepted**, the plot is locked. Open **View the signed receipt and QR**: scan the QR (or press *Open verify page*) → "This record is genuine".
+4. Try a second sale on P1 → **blocked: a sale is already in progress**.
+5. Open the **Forgery test bench**, run **Smart forger** → *Caught by digital signature*; then **Restore the records**.
 
 ---
 
@@ -14,7 +31,8 @@ LandLock is a working prototype that locks a plot the moment a sale starts, bloc
 In Bangladesh, a land sale passes through two separate offices: the deed is registered at the **Sub-Registry office**, and the record of rights (khatian) is updated later through **mutation (namjari)** at the **AC Land office**. Between those steps, and across old survey records (CS → SA → RS → BS), fraud can slip in:
 
 - the same plot is sold to **two buyers** while the first sale is still in progress;
-- someone who is **not the recorded owner** sells the land;
+- someone who is **not the recorded owner**, or only shares the owner's name, sells the land;
+- an owner takes **advances (bayna) from several buyers** for one plot;
 - a plot that is **mortgaged to a bank** is sold or mortgaged again;
 - a deed is registered but the **mutation never happens**, so the old owner still appears as owner and can sell again;
 - historical records are **quietly edited**.
@@ -57,8 +75,10 @@ flowchart LR
   KEYS["Ed25519 key<br/>keys.js / keys.json"]
   DATA[("data.json<br/>plots, transactions, ledger")]
   CP[("trusted/checkpoint.json<br/>signed checkpoint")]
+  VERIFY["Public verify page<br/>?verify=hash (from a receipt's QR)"]
 
   UI -- "HTTP JSON + X-Demo-Role" --> API
+  VERIFY -- "GET /api/verify/:hash" --> API
   API --> VAL --> GUARD --> RULES
   RULES --> DATA
   RULES --> LEDGER
@@ -69,11 +89,12 @@ flowchart LR
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19, Vite 8 (single page, inline styles, Bangla/English) |
-| Backend | Node.js (20.12+), Express 4, cors |
-| Storage | JSON files with atomic writes (no database server needed) |
-| Cryptography | Node's built-in `crypto`: SHA-256 hash chain, Ed25519 signatures |
-| Tests | Plain Node test script (no extra framework) |
+| Frontend | React 19, Vite 8, plain CSS (`index.css`); Bangla / English; hosted on Vercel |
+| Backend | Node.js (20.12+), Express 4, cors; hosted on Render |
+| Storage | JSON files with atomic writes and rollback (no database server needed) |
+| Cryptography | Node's built-in `crypto`: SHA-256 hash chain, Ed25519 signatures, signed checkpoint |
+| Receipts | `qrcode-generator` (MIT) for QR codes; public `GET /api/verify/:hash` |
+| Tests | Plain Node test script (244 checks, no extra framework) |
 
 ```
 LandLock/
@@ -86,7 +107,9 @@ LandLock/
 │   ├── package.json
 │   └── README.md            ← API and technical reference
 └── frontend/                ← React + Vite UI
-    ├── src/                 ← App.jsx, PlotMap.jsx (mouza map), LedgerChain.jsx, SideNav.jsx, Logo.jsx, index.css
+    ├── src/                 ← App.jsx (page, role switch, new-deed desk), PlotMap.jsx (mouza map), LedgerChain.jsx,
+    │                          DemoLab.jsx (forgery test bench), PlotSwitcher.jsx, SideNav.jsx, navStore.js, LangSwitch.jsx,
+    │                          Receipt.jsx + QrCode.jsx (signed receipt), VerifyPage.jsx + Root.jsx (?verify=), labels.js, index.css
     ├── public/              ← favicon
     ├── .env.example
     ├── package.json
@@ -154,7 +177,7 @@ Copy-Item frontend\.env.example frontend\.env
 cd backend
 npm test
 ```
-The suite starts its **own** servers on ports 4100/4101 with temporary data, key and checkpoint files and deletes them afterwards, so your `data.json` and `keys.json` are never touched and the main server can keep running. It covers the full sale/mortgage/survey story, roles, input validation, disputes, full-plot rule, wording, concurrency, ledger tampering, restarts, demo-mode guard, signing-key handling and failed-write rollback. The last line says `All tests passed` or how many failed. One `INFO` line documents a known limitation (see §10).
+The suite starts its **own** servers on ports 4100/4101 with temporary data, key and checkpoint files and deletes them afterwards, so your `data.json` and `keys.json` are never touched and the main server can keep running. It runs 244 checks covering the full sale/mortgage/survey story, roles, input validation, disputes, the full-plot rule, wording, concurrency (20 simultaneous sales), sale agreements, party identity (father's name + NID), signed receipts and the public verify check, ledger tampering, restarts, the demo-mode guard, signing-key handling and failed-write rollback. The last line says `All tests passed` or how many failed. One `INFO` line documents a known limitation (see §10).
 
 Frontend checks:
 ```powershell
@@ -185,18 +208,18 @@ Remove-Item Env:NODE_ENV; Remove-Item Env:LANDLOCK_DEMO_MODE
 ```
 
 ### Suggested 3-minute demo
-1. **Sub-Registrar:** on P1 start a sale Rahim → Karim (10). The plot locks; the green box lists every check that passed.
+1. **Sub-Registrar:** on P1 start a sale Rahim → Karim (10). First change Rahim's NID in the deed desk → **blocked** (`OWNER_ID_MISMATCH`, same name, different person). Put it back and submit: the plot locks and the green box lists every check that passed. Open the **signed receipt**: its QR code opens the public verify page ("This record is genuine").
 2. Try a second sale on P1 → **blocked: a sale is already in progress**.
 3. **Mark deed registered**: Cancel disappears; the plot shows Yellow "registered but not mutated".
 4. **AC Land Officer:** complete the mutation → Karim owns P1, plot unlocked. (Or reject it with a reason → **Disputed**, Red.)
 5. Open the **Forgery test bench** and run **Change an owner directly** → it is stamped *Caught* by *Ledger replay*, the banner turns red ("records do not match the ledger") and any new sale is refused. Each attack shows which protection should catch it (hash chain, digital signature, signed checkpoint, replay). **Restore the records** (Reset) puts everything back.
-6. Switch to **Buyer**: everything is read-only; with "Enable blocked buttons" the server answers ⛔ Permission denied.
+6. Switch to **Buyer**: everything is read-only; with "Show blocked buttons" the server answers ⛔ Permission denied.
 7. **Bainapatra (P5):** as Sub-Registrar register a sale agreement Nasrin → Tania (B-501/2026, advance 500000). Try a second agreement to Babul → **blocked: a second advance cannot be taken**. Try a sale to Babul → blocked; a sale to Tania goes through.
 8. **Deed vs khatian (P6):** the deed 1450/2019 says Monir sold to Shapla, but the khatian still shows Monir → Red. As Sub-Registrar try selling P6 as Monir → **blocked**. As **AC Land Officer** click *Complete mutation for deed 1450/2019* → owner Shapla, Green, records agree. **P7** shows an area mismatch (deed 14 vs khatian 18 decimal) as a Yellow warning.
 
 ## 8. Sample data
 
-Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). Owners have an invented father's name and NID (all NIDs start with `999`, clearly not real). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `backend/src/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
+Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). Owners have an invented father's name and NID (all NIDs start with `999`, clearly not real). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `backend/src/db.js`; the UI calls the map "Sample mouza map" and the footer says it is a prototype with sample data. No external data set was used: public sample deed formats (saf kabala, bainapatra) were read only to choose realistic field names, and nothing was copied or scraped.
 
 ## 9. Cryptographic integrity workflow
 
@@ -227,17 +250,17 @@ Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, M
 
 ## 11. AI tools used
 
-> **Team: please review and edit this section so it accurately describes your own use of AI tools before submitting.**
+Claude Code (Anthropic) is the only AI tool used. No other AI tool (ChatGPT, Copilot or similar) was used.
 
 | Tool | How it was used |
 |---|---|
-| Claude Code (Anthropic) | Used in this repository for code review and audit, implementing validation, role checks, ledger-integrity checks, safe storage and key handling, writing automated tests, and drafting documentation. Changes were made step by step with test runs. |
-| *(add other tools, if any)* | *(describe)* |
+| Claude Code (Anthropic) | Code review and audit; help implementing validation, role checks, ledger-integrity checks, identity checks, signed receipts, safe storage and key handling; writing automated tests; UI design and performance work; drafting documentation. Changes were made step by step, reviewed and tested by the team, and the team can explain the code. |
 
 ## 12. Troubleshooting
 
 | Problem | Fix |
 |---|---|
+| The live site is slow to show plots the first time | The free API host sleeps when idle; the first request can take 30–50 seconds. Reload once it is awake. |
 | UI says "Cannot connect to the backend" | Start the backend first (`npm start` / `npm run demo`) and check http://localhost:4000/api/plots. If you changed the port, set `VITE_API_URL` and restart `npm run dev`. |
 | `npm` "cannot be loaded because running scripts is disabled" | Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use `npm.cmd` instead of `npm`. |
 | `process.loadEnvFile is not a function` | Node.js is too old; install 20.12 or newer (`node --version`). |
@@ -246,6 +269,20 @@ Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, M
 | "signing key file keys.json is missing, but signed ledger data already exists" | Restore your original `backend\data\keys.json`. To start completely fresh instead, move the whole `backend\data` folder somewhere else and start again. |
 | "data.json is not valid JSON" | Restore it from a backup, or move it aside to start again from the sample data. |
 | Red banner "Ledger check failed" / writes return 423 | Expected after using a demo attack. Click **Restore the records** / **Reset** in the Forgery test bench (demo mode), or stop the server and move the `backend\data` folder aside. |
-| Demo buttons are missing | The backend is running without demo mode; restart it with `npm run demo`. |
+| The Forgery test bench is missing | The backend is running without demo mode; restart it with `npm run demo`. |
 | A button is greyed out / "Permission denied" | Choose the right role in the DEMO ROLE SWITCH (e.g. AC Land Officer for mutation). |
 | Port 4100 busy when running tests | Stop whatever uses it, or run `$env:TEST_PORT=4200; npm test`. |
+
+## 13. Open-source credits
+
+| Used | License |
+|---|---|
+| [React](https://react.dev), [Vite](https://vite.dev), [ESLint](https://eslint.org) | MIT |
+| [Express](https://expressjs.com), [cors](https://github.com/expressjs/cors) | MIT |
+| [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) | MIT |
+| Fonts via Google Fonts: Fraunces, Noto Serif Bengali, Anek Bangla | SIL Open Font License |
+| Node.js built-in `crypto` (SHA-256, Ed25519) | Node.js license |
+
+## 14. Changes after Round 1
+
+None yet (Round 1 deadline: 18 October 2026). Any improvement made for the final round will be listed here with its date.
