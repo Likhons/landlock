@@ -58,6 +58,49 @@ function registryAreaReason(plot) {
 // Deed numbers are compared without spaces/case, so "d-1" and " D-1 " count as the same deed.
 const normDeed = (v) => String(v).trim().toUpperCase();
 
+// ---- Party identity: father's name + NID (validity) ----
+// A plot's owner is recorded with a father's name and an NID (sample data: invented, NIDs start
+// with 999). When a seller / mortgagor gives them, both must match the record, so someone who only
+// shares the owner's name cannot sell. Optional in the API (old ledgers and callers keep working);
+// when they are not given, the result says the identity was not checked.
+const normName = (v) => String(v).trim().replace(/\s+/g, ' ').toLowerCase();
+const maskNid = (nid) => `••••${String(nid).slice(-4)}`;
+
+// Which recorded identity fields the given ones contradict (only fields present on both sides count)
+function identityMismatch(plot, id) {
+  if (!id) return [];
+  const bad = [];
+  if (id.father !== undefined && plot.owner_father && normName(id.father) !== normName(plot.owner_father)) bad.push('father');
+  if (id.nid !== undefined && plot.owner_nid && id.nid !== plot.owner_nid) bad.push('nid');
+  return bad;
+}
+const identityChecked = (plot, id) => Boolean(id && ((id.father !== undefined && plot.owner_father) || (id.nid !== undefined && plot.owner_nid)));
+
+function identityReason(plot, person, role, bad) {
+  const bnWhat = bad.map((b) => (b === 'father' ? 'পিতার নাম' : 'NID')).join(' ও ');
+  const enWhat = bad.map((b) => (b === 'father' ? "father's name" : 'NID')).join(' and ');
+  return {
+    level: RED, code: 'OWNER_ID_MISMATCH',
+    bn: `${role.bn} (${person})-এর ${bnWhat} রেকর্ডের মালিকের সাথে মেলেনি। রেকর্ডে: পিতা ${plot.owner_father || '—'}, NID ${plot.owner_nid ? maskNid(plot.owner_nid) : '—'}। একই নামের অন্য কেউ হতে পারেন। (এটি অমিল, প্রতারণার প্রমাণ নয়।)`,
+    en: `The ${role.en.toLowerCase()} (${person}) ${enWhat} does not match the recorded owner. Record: father ${plot.owner_father || '—'}, NID ${plot.owner_nid ? maskNid(plot.owner_nid) : '—'}. It may be someone else with the same name. (A mismatch, not proof of fraud.)`,
+  };
+}
+function identityCheck(plot, person, id) {
+  return {
+    code: 'OWNER_ID_MATCH', passed: identityMismatch(plot, id).length === 0,
+    bn: `বিক্রেতার পিতার নাম ও NID রেকর্ডের মালিকের সাথে মিলেছে (${person}, NID ${plot.owner_nid ? maskNid(plot.owner_nid) : '—'})`,
+    en: `Seller's father's name and NID match the recorded owner (${person}, NID ${plot.owner_nid ? maskNid(plot.owner_nid) : '—'})`,
+  };
+}
+
+// Sets the owner after a mutation, with the new owner's identity when it is known (else none is kept,
+// so an old owner's NID never stays attached to a new owner). Used by the server and by replay.
+function applyOwner(plot, name, father, nid) {
+  plot.current_owner = name;
+  if (father) plot.owner_father = father; else delete plot.owner_father;
+  if (nid) plot.owner_nid = nid; else delete plot.owner_nid;
+}
+
 // ---- Sale agreement (bainapatra) ----
 // plot.agreement = a registered bainapatra: the owner took an advance (bayna) from a buyer and agreed
 // to sell to them. Taking a second advance for the same plot from someone else is a common form of
@@ -80,7 +123,7 @@ function agreementReason(plot, action) {
 }
 
 // Checks run when someone tries to register a sale agreement (bainapatra) on a plot.
-function checkAgreement(plot, seller, buyer, agreementNo, usedAgreementNos = []) {
+function checkAgreement(plot, seller, buyer, agreementNo, usedAgreementNos = [], sellerId) {
   const reasons = [];
   if (plot.status === 'Pending') {
     reasons.push({
@@ -105,6 +148,9 @@ function checkAgreement(plot, seller, buyer, agreementNo, usedAgreementNos = [])
       bn: `বিক্রেতা (${seller}) রেকর্ড অনুযায়ী এই জমির মালিক নন। বর্তমান মালিক: ${plot.current_owner}।`,
       en: `Seller (${seller}) is not the recorded owner. Current owner: ${plot.current_owner}.`,
     });
+  } else {
+    const bad = identityMismatch(plot, sellerId);
+    if (bad.length) reasons.push(identityReason(plot, seller, { bn: 'বিক্রেতা', en: 'Seller' }, bad));
   }
   if (buyer === seller) {
     reasons.push({
@@ -126,7 +172,7 @@ function checkAgreement(plot, seller, buyer, agreementNo, usedAgreementNos = [])
 
 // Checks run when someone tries to START a sale on a plot.
 // buyer and usedDeedNos are optional so callers that only check the plot still work.
-function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } = {}) {
+function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [], sellerId } = {}) {
   const reasons = [];
 
   if (plot.status === 'Pending') {
@@ -152,6 +198,9 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
       bn: `বিক্রেতা (${seller}) রেকর্ড অনুযায়ী এই জমির মালিক নন। বর্তমান মালিক: ${plot.current_owner}।`,
       en: `Seller (${seller}) is not the recorded owner. Current owner: ${plot.current_owner}.`,
     });
+  } else {
+    const bad = identityMismatch(plot, sellerId);
+    if (bad.length) reasons.push(identityReason(plot, seller, { bn: 'বিক্রেতা', en: 'Seller' }, bad));
   }
   if (Number(deedArea) > plot.area) {
     reasons.push({
@@ -193,6 +242,7 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
       en: `Deed area (${deedArea}) is not larger than the recorded area (${plot.area})`,
     },
   ];
+  if (!failed('NOT_OWNER') && identityChecked(plot, sellerId)) checks.push(identityCheck(plot, seller, sellerId));
   if (buyer !== undefined) {
     checks.push({ code: 'DIFFERENT_PARTIES', passed: !failed('SAME_PARTY'), bn: 'ক্রেতা ও বিক্রেতা ভিন্ন ব্যক্তি', en: 'Buyer and seller are different people' });
   }
@@ -222,7 +272,7 @@ function checkSale(plot, seller, deedArea, { buyer, deedNo, usedDeedNos = [] } =
 }
 
 // Checks run when a bank tries to register a MORTGAGE on a plot.
-function checkMortgage(plot, owner, bank) {
+function checkMortgage(plot, owner, bank, ownerId) {
   const reasons = [];
   if (plot.status === 'Pending') {
     reasons.push({
@@ -247,6 +297,9 @@ function checkMortgage(plot, owner, bank) {
       bn: `বন্ধকদাতা (${owner}) রেকর্ড অনুযায়ী এই জমির মালিক নন। বর্তমান মালিক: ${plot.current_owner}।`,
       en: `Mortgagor (${owner}) is not the recorded owner. Current owner: ${plot.current_owner}.`,
     });
+  } else {
+    const bad = identityMismatch(plot, ownerId);
+    if (bad.length) reasons.push(identityReason(plot, owner, { bn: 'বন্ধকদাতা', en: 'Mortgagor' }, bad));
   }
   const level = reasons.length ? RED : GREEN;
   return { level, reasons, allowed: !reasons.length };
@@ -364,4 +417,14 @@ const NOT_CHECKED = [
   },
 ];
 
-module.exports = { checkSale, checkMortgage, checkAgreement, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED };
+// Said instead of NOT_CHECKED's identity line when the seller's father's name and NID were compared
+const ID_COMPARED_ONLY = {
+  code: 'SELLER_IDENTITY',
+  bn: 'বিক্রেতার পিতার নাম ও NID শুধু রেকর্ডের সাথে মেলানো হয়েছে; জাতীয় NID সার্ভারে যাচাই বা ছবি/আঙুলের ছাপ মেলানো হয় না।',
+  en: "The seller's father's name and NID were compared with the record only; they are not checked against the national NID server, photo or fingerprint.",
+};
+
+module.exports = {
+  checkSale, checkMortgage, checkAgreement, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED,
+  ID_COMPARED_ONLY, identityChecked, applyOwner, maskNid,
+};

@@ -27,6 +27,7 @@ LandLock shows how a shared, plot-level lock plus a verifiable history can stop 
 |---|---|
 | Double-selling | Starting a sale puts the plot in **Pending (locked)**; any second sale or mortgage is blocked (`PLOT_LOCKED`). Tested with 20 simultaneous requests: exactly one wins. |
 | Seller is not the owner | Seller must match the recorded owner (`NOT_OWNER`); after a transfer the old owner cannot sell again. |
+| **Same name, different person** | Owners are recorded with a father's name and NID. When the seller / mortgagor gives them, both must match (`OWNER_ID_MISMATCH`), so another "Rahim" cannot sell Rahim's land. The mutation moves the buyer's identity onto the record. NIDs are shown masked (••••0101). |
 | Cancel-and-resell after registration | A **registered deed cannot be cancelled**. Only the AC Land Officer can complete the mutation or **reject** it, which marks the plot **Disputed** (Red, still locked). |
 | Registered but not mutated | Flagged Yellow and listed on a "Registered but not mutated" dashboard. |
 | **Deed and khatian disagree** (registration–mutation mismatch) | Each plot's latest **Sub-Registry deed** is compared with the **khatian** (AC Land record) side by side. If the deed names a different buyer than the khatian owner (deed registered, mutation never done), the plot is **Red and sales/mortgages are blocked**: the old owner cannot sell again. A different area is a Yellow warning. Every message says it is a mismatch, not proof of fraud. The AC Land Officer can complete the missing mutation (`reconcile`), which is recorded as a signed ledger event. |
@@ -41,6 +42,7 @@ Also included:
 - **Explainable risk result:** Green / Yellow / Red, with every reason in Bangla and English. Green means **"No warnings found"**, never "safe". An accepted sale lists each check that passed and what is *not* checked.
 - **Demo role switch:** Buyer (read-only), Sub-Registrar and AC Land Officer, with permissions enforced by the API, not just hidden buttons.
 - **Strict server-side validation:** malformed values never reach storage or the signed ledger.
+- **Signed receipt with QR code:** every ledger entry has a receipt (entry, parties with masked NIDs, SHA-256 hash, Ed25519 signature, public-key fingerprint). Its QR code opens a public verify page (`/?verify=<hash>`, API `GET /api/verify/:hash`) where anyone can check the entry exists, is unchanged, is signed by the registry and that the whole ledger verifies.
 
 ## 3. Architecture
 
@@ -194,7 +196,7 @@ Remove-Item Env:NODE_ENV; Remove-Item Env:LANDLOCK_DEMO_MODE
 
 ## 8. Sample data
 
-Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `backend/src/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
+Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, Mirpur and Savar, with invented owners, khatian/dag numbers, survey history (CS 1924 → SA 1960 → RS 1985 → BS 2012) and one sample bank mortgage (P4). Owners have an invented father's name and NID (all NIDs start with `999`, clearly not real). **P6 and P7** also carry a sample "latest Sub-Registry deed" record with deliberate mismatches against the khatian (P6: owner, P7: area). The place and bank names are used only to look familiar; the records themselves are fictitious and contain **no real person's data**. The data is defined in `seed()` in `backend/src/db.js`, and the UI labels it "DEMO / SAMPLE DATA".
 
 ## 9. Cryptographic integrity workflow
 
@@ -216,7 +218,8 @@ Seven synthetic plots, **P1–P7**, in mouzas named Rampura, Banasree, Uttara, M
 
 **Known limitations (prototype):**
 - The role switch is **not authentication**: any client can claim any role. Production needs real login, secure sessions and identity-based authorization.
-- Seller identity is matched **by name only**, with no NID or biometric check; legal title is not verified.
+- Seller identity is compared with the record (name, father's name, NID) but **not** checked against the national NID server, photo or fingerprint; legal title is not verified. Identity fields are optional in the API (older ledgers and clients keep working); the UI always sends them.
+- Receipts verify against the current ledger: on the free Render plan the data resets on every deploy, so older receipts then show "not in the ledger".
 - JSON storage and a single Node process: not suitable for many users or several servers.
 - Private key in a plain file: production needs an HSM or managed key service.
 - CORS is open; there is no HTTPS or rate limiting.

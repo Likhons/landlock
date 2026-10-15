@@ -31,6 +31,7 @@ There is no Vite proxy: the browser calls the backend directly (the backend allo
 - **Plot details and risk card:** owner, area, lock status, mortgage, and the Green / Yellow / Red result with every reason. Green means "No warnings found", not a legal guarantee.
 - **Survey history** CS → SA → RS → BS with unexplained changes highlighted (sample data).
 - **Sale in progress / Disputed** cards, **Start a new sale**, **Bank mortgage** and **Sale agreement (bainapatra)** forms. An accepted sale lists the checks that passed and what is not checked.
+- **Signed receipt** (`Receipt.jsx`, opened from each history entry or after a sale / agreement / mortgage) with a QR code (`QrCode.jsx`, MIT `qrcode-generator`) to the public **verify page** (`VerifyPage.jsx`, `?verify=<hash>`).
 - **History (Ledger)** with hashes, signatures and the acting role, plus the **Registered but not mutated** list.
 - **Forgery test bench** (`DemoLab.jsx`): four attacks (edit an old entry, smart forger, delete the newest entry, change an owner directly), each with the protection that should catch it; after a run it shows which check caught it and at which entry, plus Reset. Shown only when the backend runs with `npm run demo`.
 

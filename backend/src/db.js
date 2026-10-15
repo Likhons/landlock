@@ -12,10 +12,11 @@ if (!process.env.LANDLOCK_DATA_DIR) fs.mkdirSync(DIR, { recursive: true });
 const FILE = path.join(DIR, 'data.json');
 
 function seed() {
+  // Owners carry an invented father's name and NID (all NIDs start with 999: clearly not real).
   return {
     plots: [
       {
-        id: 'P1', mouza: 'Rampura', khatian_no: '101', dag_no: '123', area: 10, current_owner: 'Rahim', status: 'Free', mortgage: null,
+        id: 'P1', mouza: 'Rampura', khatian_no: '101', dag_no: '123', area: 10, current_owner: 'Rahim', owner_father: 'Abdul Malek', owner_nid: '9990000101', status: 'Free', mortgage: null,
         survey: [
           { survey: 'CS', year: 1924, owner: 'Abdul Latif', area: 10, source: 'original', ref: 'CS Khatian 45' },
           { survey: 'SA', year: 1960, owner: 'Abdul Latif', area: 10, source: 'original', ref: 'SA Khatian 88' },
@@ -24,7 +25,7 @@ function seed() {
         ],
       },
       {
-        id: 'P2', mouza: 'Rampura', khatian_no: '101', dag_no: '124', area: 8, current_owner: 'Karim', status: 'Free', mortgage: null,
+        id: 'P2', mouza: 'Rampura', khatian_no: '101', dag_no: '124', area: 8, current_owner: 'Karim', owner_father: 'Nurul Islam', owner_nid: '9990000202', status: 'Free', mortgage: null,
         survey: [
           { survey: 'CS', year: 1924, owner: 'Nur Mia', area: 8, source: 'original', ref: 'CS Khatian 45' },
           { survey: 'SA', year: 1960, owner: 'Nur Mia', area: 8, source: 'original', ref: 'SA Khatian 88' },
@@ -33,7 +34,7 @@ function seed() {
         ],
       },
       {
-        id: 'P3', mouza: 'Banasree', khatian_no: '205', dag_no: '56', area: 15, current_owner: 'Salma', status: 'Free', mortgage: null,
+        id: 'P3', mouza: 'Banasree', khatian_no: '205', dag_no: '56', area: 15, current_owner: 'Salma', owner_father: 'Motaleb Hossain', owner_nid: '9990000303', status: 'Free', mortgage: null,
         survey: [
           { survey: 'CS', year: 1924, owner: 'Rahman', area: 12, source: 'original', ref: 'CS Khatian 12' },
           { survey: 'SA', year: 1960, owner: 'Rahman', area: 12, source: 'original', ref: 'SA Khatian 30' },
@@ -42,7 +43,7 @@ function seed() {
         ],
       },
       {
-        id: 'P4', mouza: 'Banasree', khatian_no: '205', dag_no: '57', area: 12, current_owner: 'Jamal', status: 'Free',
+        id: 'P4', mouza: 'Banasree', khatian_no: '205', dag_no: '57', area: 12, current_owner: 'Jamal', owner_father: 'Abdul Jalil', owner_nid: '9990000404', status: 'Free',
         mortgage: { bank: 'Janata Bank', loan_ref: 'LN-2024-77' },
         survey: [
           { survey: 'CS', year: 1924, owner: 'Miah Uddin', area: 12, source: 'original', ref: 'CS Khatian 12' },
@@ -52,7 +53,7 @@ function seed() {
         ],
       },
       {
-        id: 'P5', mouza: 'Uttara', khatian_no: '310', dag_no: '9', area: 20, current_owner: 'Nasrin', status: 'Free', mortgage: null,
+        id: 'P5', mouza: 'Uttara', khatian_no: '310', dag_no: '9', area: 20, current_owner: 'Nasrin', owner_father: 'Siddiqur Rahman', owner_nid: '9990000505', status: 'Free', mortgage: null,
         survey: [
           { survey: 'CS', year: 1924, owner: 'Sufia Khatun', area: 20, source: 'original', ref: 'CS Khatian 9' },
           { survey: 'SA', year: 1960, owner: 'Sufia Khatun', area: 20, source: 'original', ref: 'SA Khatian 14' },
@@ -64,8 +65,8 @@ function seed() {
       // ("registry"), so LandLock can compare it with the khatian (AC Land record), i.e. the plot itself.
       // P6: deed says Monir sold to Shapla in 2019, but the khatian still shows Monir (mutation never done).
       {
-        id: 'P6', mouza: 'Mirpur', khatian_no: '412', dag_no: '77', area: 12, current_owner: 'Monir', status: 'Free', mortgage: null,
-        registry: { office: 'Sub-Registry Office (sample)', deed_no: '1450/2019', date: '2019-03-14', seller: 'Monir', buyer: 'Shapla', area: 12 },
+        id: 'P6', mouza: 'Mirpur', khatian_no: '412', dag_no: '77', area: 12, current_owner: 'Monir', owner_father: 'Abdul Kader', owner_nid: '9990000606', status: 'Free', mortgage: null,
+        registry: { office: 'Sub-Registry Office (sample)', deed_no: '1450/2019', date: '2019-03-14', seller: 'Monir', buyer: 'Shapla', buyer_father: 'Rafiqul Islam', buyer_nid: '9990000616', area: 12 },
         survey: [
           { survey: 'CS', year: 1924, owner: 'Abdul Kader', area: 12, source: 'original', ref: 'CS Khatian 60' },
           { survey: 'SA', year: 1960, owner: 'Abdul Kader', area: 12, source: 'original', ref: 'SA Khatian 71' },
@@ -75,8 +76,8 @@ function seed() {
       },
       // P7: deed says Rafiq bought 14 decimal, but the khatian records 18 decimal.
       {
-        id: 'P7', mouza: 'Savar', khatian_no: '518', dag_no: '204', area: 18, current_owner: 'Rafiq', status: 'Free', mortgage: null,
-        registry: { office: 'Sub-Registry Office (sample)', deed_no: '2231/2021', date: '2021-08-02', seller: 'Jalal', buyer: 'Rafiq', area: 14 },
+        id: 'P7', mouza: 'Savar', khatian_no: '518', dag_no: '204', area: 18, current_owner: 'Rafiq', owner_father: 'Habibur Rahman', owner_nid: '9990000707', status: 'Free', mortgage: null,
+        registry: { office: 'Sub-Registry Office (sample)', deed_no: '2231/2021', date: '2021-08-02', seller: 'Jalal', buyer: 'Rafiq', buyer_father: 'Habibur Rahman', buyer_nid: '9990000707', area: 14 },
         survey: [
           { survey: 'CS', year: 1924, owner: 'Karim Bux', area: 14, source: 'original', ref: 'CS Khatian 33' },
           { survey: 'SA', year: 1960, owner: 'Karim Bux', area: 14, source: 'original', ref: 'SA Khatian 41' },

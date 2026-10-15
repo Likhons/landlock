@@ -11,7 +11,10 @@ const db = require('./db');
 const ledger = require('./ledger');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, checkAgreement, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED } = require('./rules');
+const {
+  checkSale, checkMortgage, checkAgreement, assessPlot, partialSale, registryOwnerMismatch, RESULT_NOTICE, NOT_CHECKED,
+  ID_COMPARED_ONLY, identityChecked, applyOwner,
+} = require('./rules');
 
 const app = express();
 app.use(cors());
@@ -104,6 +107,13 @@ const area = (v) => {
 };
 // Money (advance in taka): same rule as area, a finite number greater than 0.
 const amount = area;
+// NID: Bangladesh NID numbers have 10, 13 or 17 digits (sample data uses invented ones starting with 999)
+const NID_RE = /^(\d{10}|\d{13}|\d{17})$/;
+const nidNo = (v) => { const t = text(v); return t && NID_RE.test(t) ? t : null; };
+// Optional fields: undefined when not given (empty), null when given but invalid
+const optional = (check, v) => (v === undefined || v === null || (typeof v === 'string' && !v.trim()) ? undefined : check(v));
+// The identity of one party from the request body, e.g. ident(req.body, 'seller') -> { father, nid }
+const ident = (body, who) => ({ father: optional(name, body[`${who}_father`]), nid: optional(nidNo, body[`${who}_nid`]) });
 // Returns the names of fields whose value failed validation (null).
 const badFields = (values) => Object.entries(values).filter(([, v]) => v === null).map(([k]) => k);
 
@@ -118,6 +128,12 @@ const FIELD_LABEL = {
   owner: { bn: 'বন্ধকদাতা', en: 'mortgagor' },
   bank: { bn: 'ব্যাংক', en: 'bank' },
   loan_ref: { bn: 'ঋণ নং', en: 'loan no.' },
+  seller_father: { bn: 'বিক্রেতার পিতার নাম', en: "seller's father's name" },
+  seller_nid: { bn: 'বিক্রেতার NID (১০, ১৩ বা ১৭ অঙ্ক)', en: "seller's NID (10, 13 or 17 digits)" },
+  buyer_father: { bn: 'ক্রেতার পিতার নাম', en: "buyer's father's name" },
+  buyer_nid: { bn: 'ক্রেতার NID (১০, ১৩ বা ১৭ অঙ্ক)', en: "buyer's NID (10, 13 or 17 digits)" },
+  owner_father: { bn: 'বন্ধকদাতার পিতার নাম', en: "mortgagor's father's name" },
+  owner_nid: { bn: 'বন্ধকদাতার NID (১০, ১৩ বা ১৭ অঙ্ক)', en: "mortgagor's NID (10, 13 or 17 digits)" },
   agreement_no: { bn: 'বায়নাপত্র নং', en: 'agreement no.' },
   advance: { bn: 'অগ্রিম টাকা (শূন্যের বেশি সংখ্যা)', en: 'advance amount (a number greater than 0)' },
 };
@@ -183,6 +199,22 @@ app.get('/api/roles', (req, res) => res.json(rbac.describe()));
 // Lets the UI show or hide the demo tools. Nothing secret is returned.
 app.get('/api/config', (req, res) => res.json({ demo_mode: config.demoMode }));
 
+// Public check of one ledger entry by its hash (what the receipt's QR code opens). Read-only.
+app.get('/api/verify/:hash', (req, res) => {
+  if (!/^[0-9a-f]{64}$/.test(req.params.hash)) {
+    return res.status(400).json({ found: false, code: 'BAD_HASH', bn: 'রসিদের কোডটি সঠিক নয় (৬৪ অক্ষরের hash লাগবে)।', en: 'The receipt code is not valid (a 64-character hash is needed).' });
+  }
+  const result = ledger.checkEntry(req.params.hash);
+  if (!result) {
+    return res.status(404).json({
+      found: false, code: 'NOT_IN_LEDGER',
+      bn: 'এই কোডের কোনো এন্ট্রি LandLock লেজারে নেই। রসিদটি জাল, বদলানো, অথবা অন্য রেজিস্টারের হতে পারে।',
+      en: 'No entry with this code exists in the LandLock ledger. The receipt may be forged, altered, or from another register.',
+    });
+  }
+  res.json(result);
+});
+
 // ---- Sale workflow ----
 // 1) Initiate: run checks; if OK, lock the plot (Pending)
 app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
@@ -191,7 +223,12 @@ app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
   const buyer = name(req.body.buyer);
   const deed_no = ref(req.body.deed_no);
   const deed_area = area(req.body.deed_area);
-  const bad = badFields({ plot_id, seller, buyer, deed_no, deed_area });
+  const sellerId = ident(req.body, 'seller');
+  const buyerId = ident(req.body, 'buyer');
+  const bad = badFields({
+    plot_id, seller, buyer, deed_no, deed_area,
+    seller_father: sellerId.father, seller_nid: sellerId.nid, buyer_father: buyerId.father, buyer_nid: buyerId.nid,
+  });
   if (bad.length) return invalid(res, bad);
   const plot = findPlot(plot_id);
   if (!plot) return plotNotFound(res);
@@ -200,23 +237,29 @@ app.post('/api/sale/initiate', guard('sale.initiate'), (req, res) => {
   if (partial) return res.status(400).json({ error: partial.en, ...partial, plot_area: plot.area, deed_area });
 
   const usedDeedNos = db.get().transactions.map((t) => t.deed_no);
-  const result = checkSale(plot, seller, deed_area, { buyer, deedNo: deed_no, usedDeedNos });
+  const result = checkSale(plot, seller, deed_area, { buyer, deedNo: deed_no, usedDeedNos, sellerId });
+  const ids = { ...ledger.idFields('seller', sellerId.father, sellerId.nid), ...ledger.idFields('buyer', buyerId.father, buyerId.nid) };
   if (!result.allowed) {
-    ledger.append(plot.id, 'SALE_BLOCKED', { seller, buyer, deed_no, reasons: result.reasons.map((r) => r.code), by_role: req.role });
+    ledger.append(plot.id, 'SALE_BLOCKED', { seller, buyer, deed_no, ...ids, reasons: result.reasons.map((r) => r.code), by_role: req.role });
     return res.status(409).json({ blocked: true, ...result });
   }
 
   const tx = {
     id: db.get().transactions.length + 1,
-    plot_id: plot.id, seller, buyer, deed_no, deed_area,
+    plot_id: plot.id, seller, buyer, deed_no, deed_area, ...ledger.idFields('buyer', buyerId.father, buyerId.nid),
     reg_status: 'pending', mutation_status: 'pending', state: 'active',
     created_at: new Date().toISOString(),
   };
   db.get().transactions.push(tx);
   plot.status = 'Pending';
   db.save();
-  ledger.append(plot.id, 'SALE_INITIATED', { tx_id: tx.id, seller, buyer, deed_no, deed_area: tx.deed_area, by_role: req.role });
-  res.status(201).json({ blocked: false, ...result, checks: acceptedChecks(result.checks, plot, deed_area), not_checked: NOT_CHECKED, notice: RESULT_NOTICE, transaction: tx });
+  const entry = ledger.append(plot.id, 'SALE_INITIATED', { tx_id: tx.id, seller, buyer, deed_no, deed_area: tx.deed_area, ...ids, by_role: req.role });
+  // when the seller's identity was compared, say exactly that much; otherwise that it was not checked
+  const notChecked = identityChecked(plot, sellerId) ? [ID_COMPARED_ONLY, ...NOT_CHECKED.filter((n) => n.code !== 'SELLER_IDENTITY')] : NOT_CHECKED;
+  res.status(201).json({
+    blocked: false, ...result, checks: acceptedChecks(result.checks, plot, deed_area), not_checked: notChecked, notice: RESULT_NOTICE,
+    transaction: tx, receipt: { entry_id: entry.id, hash: entry.hash },
+  });
 });
 
 // 2) Registration done (deed registered, khatian not yet updated)
@@ -239,7 +282,7 @@ app.post('/api/sale/:id/mutate', guard('sale.mutate'), (req, res) => {
   if (!tx) return;
   if (tx.reg_status !== 'done') return res.status(400).json({ error: 'Registration must be completed before mutation' });
   const plot = findPlot(tx.plot_id);
-  plot.current_owner = tx.buyer;
+  applyOwner(plot, tx.buyer, tx.buyer_father, tx.buyer_nid);
   plot.status = 'Free';
   // A standing sale agreement is fulfilled: checkSale only lets its own buyer buy the plot.
   delete plot.agreement;
@@ -308,7 +351,7 @@ app.post('/api/plots/:id/reconcile', guard('sale.mutate'), (req, res) => {
     });
   }
   const previous_owner = plot.current_owner;
-  plot.current_owner = plot.registry.buyer;
+  applyOwner(plot, plot.registry.buyer, plot.registry.buyer_father, plot.registry.buyer_nid);
   db.save();
   ledger.append(plot.id, 'REGISTRY_MUTATION_DONE', {
     deed_no: plot.registry.deed_no, previous_owner, new_owner: plot.current_owner, by_role: req.role,
@@ -322,20 +365,22 @@ app.post('/api/mortgage/create', guard('mortgage.create'), (req, res) => {
   const owner = name(req.body.owner);
   const bank = name(req.body.bank);
   const loan_ref = ref(req.body.loan_ref);
-  const bad = badFields({ plot_id, owner, bank, loan_ref });
+  const ownerId = ident(req.body, 'owner');
+  const bad = badFields({ plot_id, owner, bank, loan_ref, owner_father: ownerId.father, owner_nid: ownerId.nid });
   if (bad.length) return invalid(res, bad);
   const plot = findPlot(plot_id);
   if (!plot) return plotNotFound(res);
 
-  const result = checkMortgage(plot, owner, bank);
+  const result = checkMortgage(plot, owner, bank, ownerId);
+  const ids = ledger.idFields('owner', ownerId.father, ownerId.nid);
   if (!result.allowed) {
-    ledger.append(plot.id, 'MORTGAGE_BLOCKED', { owner, bank, loan_ref, reasons: result.reasons.map((x) => x.code), by_role: req.role });
+    ledger.append(plot.id, 'MORTGAGE_BLOCKED', { owner, bank, loan_ref, ...ids, reasons: result.reasons.map((x) => x.code), by_role: req.role });
     return res.status(409).json({ blocked: true, ...result });
   }
   plot.mortgage = { bank, loan_ref };
   db.save();
-  ledger.append(plot.id, 'MORTGAGE_CREATED', { owner, bank, loan_ref, by_role: req.role });
-  res.status(201).json({ blocked: false, ...result, mortgage: plot.mortgage });
+  const entry = ledger.append(plot.id, 'MORTGAGE_CREATED', { owner, bank, loan_ref, ...ids, by_role: req.role });
+  res.status(201).json({ blocked: false, ...result, mortgage: plot.mortgage, receipt: { entry_id: entry.id, hash: entry.hash } });
 });
 
 // Release needs the loan number being released, so the wrong mortgage cannot be cleared by mistake.
@@ -370,21 +415,27 @@ app.post('/api/agreement/create', guard('agreement.create'), (req, res) => {
   const buyer = name(req.body.buyer);
   const agreement_no = ref(req.body.agreement_no);
   const advance = amount(req.body.advance);
-  const bad = badFields({ plot_id, seller, buyer, agreement_no, advance });
+  const sellerId = ident(req.body, 'seller');
+  const buyerId = ident(req.body, 'buyer');
+  const bad = badFields({
+    plot_id, seller, buyer, agreement_no, advance,
+    seller_father: sellerId.father, seller_nid: sellerId.nid, buyer_father: buyerId.father, buyer_nid: buyerId.nid,
+  });
   if (bad.length) return invalid(res, bad);
   const plot = findPlot(plot_id);
   if (!plot) return plotNotFound(res);
 
-  const result = checkAgreement(plot, seller, buyer, agreement_no, ledger.usedAgreementNos(db.get().ledger));
+  const result = checkAgreement(plot, seller, buyer, agreement_no, ledger.usedAgreementNos(db.get().ledger), sellerId);
+  const ids = { ...ledger.idFields('seller', sellerId.father, sellerId.nid), ...ledger.idFields('buyer', buyerId.father, buyerId.nid) };
   if (!result.allowed) {
-    ledger.append(plot.id, 'AGREEMENT_BLOCKED', { seller, buyer, agreement_no, reasons: result.reasons.map((r) => r.code), by_role: req.role });
+    ledger.append(plot.id, 'AGREEMENT_BLOCKED', { seller, buyer, agreement_no, ...ids, reasons: result.reasons.map((r) => r.code), by_role: req.role });
     return res.status(409).json({ blocked: true, ...result });
   }
   const data = { agreement_no, seller, buyer, advance, date: new Date().toISOString().slice(0, 10) };
   plot.agreement = ledger.agreementRecord(data);
   db.save();
-  ledger.append(plot.id, 'AGREEMENT_CREATED', { ...data, by_role: req.role });
-  res.status(201).json({ blocked: false, ...result, agreement: plot.agreement });
+  const entry = ledger.append(plot.id, 'AGREEMENT_CREATED', { ...data, ...ids, by_role: req.role });
+  res.status(201).json({ blocked: false, ...result, agreement: plot.agreement, receipt: { entry_id: entry.id, hash: entry.hash } });
 });
 
 // Cancelling needs the agreement number and a reason, so the wrong agreement cannot be cleared by mistake.

@@ -11,7 +11,7 @@ const path = require('path');
 const db = require('./db');
 const keys = require('./keys');
 const rbac = require('./rbac');
-const { checkSale, checkMortgage, checkAgreement, partialSale, registryOwnerMismatch } = require('./rules');
+const { checkSale, checkMortgage, checkAgreement, partialSale, registryOwnerMismatch, applyOwner } = require('./rules');
 const { writeJsonAtomic } = require('./fsutil');
 
 const GENESIS = '0'.repeat(64);
@@ -42,8 +42,15 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 // When LandLock registers a deed, that deed becomes the plot's latest Sub-Registry record.
 // Used by the register route and by replay, so both build exactly the same record.
 function deedRecord(tx) {
-  return { office: 'Sub-Registry Office (via LandLock)', deed_no: tx.deed_no, seller: tx.seller, buyer: tx.buyer, area: tx.deed_area, tx_id: tx.id };
+  return {
+    office: 'Sub-Registry Office (via LandLock)', deed_no: tx.deed_no, seller: tx.seller, buyer: tx.buyer,
+    ...(tx.buyer_father ? { buyer_father: tx.buyer_father } : {}), ...(tx.buyer_nid ? { buyer_nid: tx.buyer_nid } : {}),
+    area: tx.deed_area, tx_id: tx.id,
+  };
 }
+
+// Only the identity fields that were given (no undefined keys, so stored and replayed data are equal)
+const idFields = (prefix, father, nid) => ({ ...(father ? { [`${prefix}_father`]: father } : {}), ...(nid ? { [`${prefix}_nid`]: nid } : {}) });
 
 // A registered sale agreement (bainapatra), built from its AGREEMENT_CREATED event data.
 // Used by the create route and by replay, so both build exactly the same record.
@@ -56,10 +63,20 @@ const usedAgreementNos = (entries) => entries.filter((e) => e.event_type === 'AG
 
 // Ledgers created before sample plots P6/P7 were added start from P1-P5 only; they stay valid.
 const LEGACY_PLOT_IDS = ['P1', 'P2', 'P3', 'P4', 'P5'];
+// Ledgers created before owners carried a father's name and NID start without them; they stay valid too.
+function withoutIdentity(plots) {
+  return plots.map((p) => {
+    const { owner_father, owner_nid, ...rest } = p;
+    if (!rest.registry) return rest;
+    const { buyer_father, buyer_nid, ...reg } = rest.registry;
+    return { ...rest, registry: reg };
+  });
+}
 function isExpectedGenesis(data) {
   const now = genesisData();
-  if (stable(data) === stable(now)) return true;
-  return stable(data) === stable({ ...now, plots: now.plots.filter((p) => LEGACY_PLOT_IDS.includes(p.id)) });
+  const variants = [now.plots, withoutIdentity(now.plots)];
+  return variants.some((plots) => stable(data) === stable({ ...now, plots })
+    || stable(data) === stable({ ...now, plots: plots.filter((p) => LEGACY_PLOT_IDS.includes(p.id)) }));
 }
 
 function genesisData() {
@@ -148,10 +165,12 @@ function replay(ledger) {
         if (partialSale(plot, d.deed_area)) return fail('partial sale (deed area smaller than the plot) is not supported');
         if (!checkSale(plot, d.seller, d.deed_area, {
           buyer: d.buyer, deedNo: d.deed_no, usedDeedNos: [...txs.values()].map((t) => t.deed_no),
+          sellerId: { father: d.seller_father, nid: d.seller_nid },
         }).allowed) return fail('sale was not allowed in the replayed state');
         if (txs.has(d.tx_id)) return fail('duplicate transaction id');
         txs.set(d.tx_id, {
           id: d.tx_id, plot_id: plot.id, seller: d.seller, buyer: d.buyer, deed_no: d.deed_no, deed_area: d.deed_area,
+          ...idFields('buyer', d.buyer_father, d.buyer_nid),
           reg_status: 'pending', mutation_status: 'pending', state: 'active',
         });
         plot.status = 'Pending';
@@ -165,12 +184,12 @@ function replay(ledger) {
         // AC Land completes the mutation of a deed that was registered outside LandLock
         if (!registryOwnerMismatch(plot) || plot.mortgage) return fail('no unmutated Sub-Registry deed to reconcile');
         if (d.deed_no !== plot.registry.deed_no || d.new_owner !== plot.registry.buyer) return fail('does not match the Sub-Registry deed');
-        plot.current_owner = plot.registry.buyer;
+        applyOwner(plot, plot.registry.buyer, plot.registry.buyer_father, plot.registry.buyer_nid);
         break;
       case 'MUTATION_DONE':
         if (!activeTx() || tx.reg_status !== 'done') return fail('mutation without a registered deed');
         if (d.new_owner !== tx.buyer) return fail('new owner does not match the registered buyer');
-        plot.current_owner = tx.buyer;
+        applyOwner(plot, tx.buyer, tx.buyer_father, tx.buyer_nid);
         plot.status = 'Free';
         delete plot.agreement; // the sale agreement (if any) is fulfilled
         tx.mutation_status = 'done';
@@ -178,7 +197,7 @@ function replay(ledger) {
         break;
       case 'AGREEMENT_CREATED':
         if (typeof d.advance !== 'number' || !Number.isFinite(d.advance) || d.advance <= 0) return fail('advance is not a positive number');
-        if (!checkAgreement(plot, d.seller, d.buyer, d.agreement_no, agreementNos).allowed) return fail('agreement was not allowed in the replayed state');
+        if (!checkAgreement(plot, d.seller, d.buyer, d.agreement_no, agreementNos, { father: d.seller_father, nid: d.seller_nid }).allowed) return fail('agreement was not allowed in the replayed state');
         plot.agreement = agreementRecord(d);
         agreementNos.push(d.agreement_no);
         break;
@@ -202,7 +221,7 @@ function replay(ledger) {
         plot.status = 'Free';
         break;
       case 'MORTGAGE_CREATED':
-        if (!checkMortgage(plot, d.owner, d.bank).allowed) return fail('mortgage was not allowed in the replayed state');
+        if (!checkMortgage(plot, d.owner, d.bank, { father: d.owner_father, nid: d.owner_nid }).allowed) return fail('mortgage was not allowed in the replayed state');
         plot.mortgage = { bank: d.bank, loan_ref: d.loan_ref };
         break;
       case 'MORTGAGE_RELEASED':
@@ -216,7 +235,7 @@ function replay(ledger) {
   return { plots, txs };
 }
 
-const TX_FIELDS = ['plot_id', 'seller', 'buyer', 'deed_no', 'deed_area', 'reg_status', 'mutation_status', 'state', 'dispute_reason'];
+const TX_FIELDS = ['plot_id', 'seller', 'buyer', 'buyer_father', 'buyer_nid', 'deed_no', 'deed_area', 'reg_status', 'mutation_status', 'state', 'dispute_reason'];
 
 function checkState(ledger) {
   const r = replay(ledger);
@@ -316,6 +335,34 @@ function verify() {
   };
 }
 
+// ---- Public check of one entry (the receipt / QR code) ----
+// Recomputes the entry's hash, checks the registry signature over it, and reports whether the whole
+// ledger verifies. NIDs in the entry are masked: this answer can be shown to anyone holding the receipt.
+const publicKeyFingerprint = () => crypto.createHash('sha256').update(keys.publicKey).digest('hex').slice(0, 16);
+const maskNids = (data) => Object.fromEntries(Object.entries(data || {}).map(([k, v]) => [k, /_nid$/.test(k) ? `••••${String(v).slice(-4)}` : v]));
+function checkEntry(hash) {
+  const { ledger } = db.get();
+  const e = ledger.find((x) => x.hash === hash);
+  if (!e) return null;
+  const hashOk = computeHash(e.prev_hash, e) === e.hash;
+  const signatureOk = keys.verify(e.hash, e.signature);
+  const chain = verify();
+  const plot = db.get().plots.find((x) => x.id === e.plot_id);
+  return {
+    found: true,
+    authentic: hashOk && signatureOk && chain.valid,
+    checks: { hash: hashOk, signature: signatureOk, ledger: chain.valid },
+    ledger_problem: chain.valid ? null : { kind: chain.kind, brokenAt: chain.brokenAt, reason: chain.reason, bn: chain.bn },
+    entry: {
+      id: e.id, event_type: e.event_type, plot_id: e.plot_id, timestamp: e.timestamp,
+      hash: e.hash, prev_hash: e.prev_hash, signature: e.signature, signer: e.signer, data: maskNids(e.data),
+    },
+    plot: plot ? { id: plot.id, mouza: plot.mouza, khatian_no: plot.khatian_no, dag_no: plot.dag_no } : null,
+    ledger_length: ledger.length,
+    public_key_fingerprint: publicKeyFingerprint(),
+  };
+}
+
 function forPlot(plot_id) {
   return db.get().ledger.filter((e) => e.plot_id === plot_id);
 }
@@ -332,4 +379,4 @@ function forPlot(plot_id) {
   else checkpointProblem = 'missing';
 })();
 
-module.exports = { append, verify, forPlot, computeHash, reset, deedRecord, agreementRecord, usedAgreementNos };
+module.exports = { append, verify, forPlot, computeHash, reset, deedRecord, agreementRecord, usedAgreementNos, idFields, checkEntry, publicKeyFingerprint };

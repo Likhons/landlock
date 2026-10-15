@@ -53,6 +53,8 @@ Every write request is validated on the server before any rule runs. Invalid inp
 | `deed_no`, `loan_ref`, `agreement_no` | e.g. `D-1001`, `4521/1998`: letters, digits, `/ . _ -` and spaces; max 40 |
 | `deed_area` | a finite number > 0, or plain decimal text (`"10"`, `"10.5"`). Rejected: `NaN`, `Infinity`, `"1e3"`, `"0x10"`, negative, zero, empty, arrays, objects |
 | `advance` | same rule as `deed_area` (taka) |
+| `seller_father`, `buyer_father`, `owner_father` | optional; same rule as names |
+| `seller_nid`, `buyer_nid`, `owner_nid` | optional; 10, 13 or 17 digits |
 | `:id` (transaction) | positive integer |
 | `reason` | non-empty text, max 300 characters, no control characters |
 
@@ -79,6 +81,7 @@ A **409-blocked** sale or mortgage attempt changes no plot or transaction, but i
 - **Registered deeds cannot be cancelled.** Only the AC Land Officer can complete the mutation (owner changes, plot unlocks) or reject it with a reason (transaction `disputed`, plot `Disputed`: Red, still locked, owner unchanged).
 - **Mortgage:** double mortgage, mortgage during a sale and mortgage by a non-owner are blocked; release needs the matching loan number (`LOAN_MISMATCH`).
 - **Sale agreement (bainapatra):** `plot.agreement` holds the registered agreement. While it stands: a second agreement is blocked (`DOUBLE_AGREEMENT`), a sale to anyone but its buyer and any mortgage are blocked (`AGREEMENT_EXISTS`), and the plot shows Yellow (`AGREEMENT_ACTIVE`). Agreement numbers can never be reused (`DUPLICATE_AGREEMENT_NO`). The mutation of a sale to its buyer fulfils (removes) it; cancelling needs the matching number (`AGREEMENT_MISMATCH`) and a reason. Events: `AGREEMENT_CREATED` / `AGREEMENT_BLOCKED` / `AGREEMENT_CANCELLED`.
+- **Party identity:** plots record `owner_father` and `owner_nid`. If the seller (sale, agreement) or mortgagor gives `*_father` / `*_nid`, they must match or the request is blocked with `OWNER_ID_MISMATCH` (Red). Accepted sales then list `OWNER_ID_MATCH`, and `not_checked` says the NID was compared with the record only. Mutation / reconcile set the new owner's identity (or none if unknown). Sale, agreement and mortgage responses include `receipt: { entry_id, hash }`.
 - **Plot identity:** mouza + khatian no. + dag no. must be unique (the server refuses to start otherwise); `GET /api/plots?mouza=&khatian_no=&dag_no=` looks plots up.
 - **Explainable result:** Green means "No warnings found", never "safe". Accepted sales return `checks` (every check that ran) and `not_checked` (seller identity, legal title).
 - **Deed vs khatian (registration–mutation mismatch):** `plot.registry` is the plot's latest registered deed (a sample Sub-Registry record for P6/P7; a deed registered through LandLock replaces it). On a Free plot, a deed buyer different from the khatian owner gives `REGISTRY_OWNER_MISMATCH` (Red; sales and mortgages blocked) and a different area gives `REGISTRY_AREA_MISMATCH` (Yellow). `POST /api/plots/:id/reconcile` (AC Land Officer) completes the missing mutation and records a signed `REGISTRY_MUTATION_DONE` event. Ledgers created before P6/P7 existed (5-plot GENESIS) still verify.
@@ -133,6 +136,7 @@ While verification fails, all writes are refused (423).
 | POST | /api/plots/:id/reconcile | AC Land Officer | Complete the mutation of the plot's unmutated Sub-Registry deed (owner becomes the deed buyer) |
 | POST | /api/agreement/create, /api/agreement/cancel | Sub-Registrar | Register a sale agreement (`plot_id, seller, buyer, agreement_no, advance`) / cancel it (`plot_id, agreement_no, reason`) |
 | POST | /api/mortgage/create, /api/mortgage/release | Sub-Registrar | Register / release a mortgage (release needs `loan_ref`) |
+| GET | /api/verify/:hash | public | Receipt check: entry found, hash recomputed, registry signature, whole-ledger verification; NIDs masked; `public_key_fingerprint` |
 | GET | /api/gap | any | Registered deeds waiting for mutation (including disputed ones and unmutated Sub-Registry deeds) |
 | GET | /api/transactions, /api/ledger, /api/ledger/verify, /api/ledger/public-key | any | Raw data, full integrity check, public key |
 | POST | /api/dev/reset, /api/dev/tamper, /api/dev/tamper-smart, /api/dev/attack | demo mode only | Reset and attack simulations (`attack` types: owner_change, bad_signature, break_link, delete_middle, truncate_tail, reorder). 404 `DEMO_DISABLED` otherwise. |

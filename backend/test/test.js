@@ -942,6 +942,66 @@ async function agreementTests() {
   await post('/dev/reset');
 }
 
+async function identityAndReceiptTests() {
+  section("Party identity (father's name + NID) and signed receipts");
+  await post('/dev/reset');
+  const rahim = { seller_father: 'Abdul Malek', seller_nid: '9990000101' };
+  const karim = { buyer_father: 'Mokbul Hossain', buyer_nid: '9990001234' };
+
+  let r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-ID1', deed_area: 10, seller_nid: '12345' }, SR);
+  ok('ID1. NID with a wrong length rejected (400 seller_nid)', r.status === 400 && r.body.fields.includes('seller_nid'));
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-ID2', deed_area: 10, seller_father: 'Abdul Malek', seller_nid: '9990009999' }, SR);
+  ok('ID2. Same name, different NID blocked (OWNER_ID_MISMATCH)', r.status === 409 && r.body.reasons.some((x) => x.code === 'OWNER_ID_MISMATCH')
+    && r.body.reasons.every((x) => x.code !== 'NOT_OWNER'));
+  ok('ID3. The mismatch message masks the recorded NID', /••••0101/.test(r.body.reasons.find((x) => x.code === 'OWNER_ID_MISMATCH').en)
+    && !/9990000101/.test(JSON.stringify(r.body)));
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-ID3', deed_area: 10, ...rahim, seller_father: 'Someone Else' }, SR);
+  ok("ID4. Right NID but different father's name blocked", r.status === 409 && r.body.reasons.some((x) => x.code === 'OWNER_ID_MISMATCH'));
+
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Rahim', buyer: 'Karim', deed_no: 'D-ID4', deed_area: 10, ...rahim, ...karim }, SR);
+  ok('ID5. Matching identity accepted, OWNER_ID_MATCH listed as passed', r.status === 201
+    && r.body.checks.some((c) => c.code === 'OWNER_ID_MATCH' && c.passed));
+  ok('ID6. Not-checked list says the NID was compared with the record only', /national NID server/.test(r.body.not_checked.find((n) => n.code === 'SELLER_IDENTITY').en));
+  ok('ID7. Accepted sale returns a receipt (entry id + 64-char hash)', r.body.receipt && /^[0-9a-f]{64}$/.test(r.body.receipt.hash));
+  const saleReceipt = r.body.receipt;
+  await post(`/sale/${r.body.transaction.id}/register`, {}, SR);
+  await post(`/sale/${r.body.transaction.id}/mutate`, {}, AC);
+  let p = await get('/plots/P1');
+  ok("ID8. Mutation moves the buyer's identity onto the record", p.plot.current_owner === 'Karim' && p.plot.owner_nid === '9990001234' && p.plot.owner_father === 'Mokbul Hossain');
+  r = await post('/sale/initiate', { plot_id: 'P1', seller: 'Karim', buyer: 'Salam', deed_no: 'D-ID5', deed_area: 10, seller_father: 'Nurul Islam', seller_nid: '9990000202' }, SR);
+  ok("ID9. Another Karim (P2's owner) cannot sell P1 using his own identity", r.status === 409 && r.body.reasons.some((x) => x.code === 'OWNER_ID_MISMATCH'));
+
+  r = await post('/mortgage/create', { plot_id: 'P5', owner: 'Nasrin', bank: 'Sample Bank', loan_ref: 'LN-ID1', owner_nid: '9990000999' }, SR);
+  ok('ID10. Mortgage by a same-name person with another NID blocked', r.status === 409 && r.body.reasons.some((x) => x.code === 'OWNER_ID_MISMATCH'));
+  r = await post('/agreement/create', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Tania', agreement_no: 'B-ID1', advance: 1000, seller_father: 'Wrong Father' }, SR);
+  ok('ID11. Agreement by a same-name person with another father blocked', r.status === 409 && r.body.reasons.some((x) => x.code === 'OWNER_ID_MISMATCH'));
+  r = await post('/agreement/create', { plot_id: 'P5', seller: 'Nasrin', buyer: 'Tania', agreement_no: 'B-ID2', advance: 1000, seller_father: 'Siddiqur Rahman', seller_nid: '9990000505' }, SR);
+  ok('ID12. Agreement with matching identity accepted, with a receipt', r.status === 201 && r.body.receipt && r.body.receipt.hash);
+
+  await post('/plots/P6/reconcile', {}, AC);
+  p = await get('/plots/P6');
+  ok("ID13. Reconciling P6 records Shapla's identity from the Sub-Registry deed", p.plot.current_owner === 'Shapla' && p.plot.owner_nid === '9990000616');
+  ok('ID14. Ledger valid after identity events', (await get('/ledger/verify')).valid === true);
+  await stop(); await start();
+  ok('ID15. Identity history replays after a restart', (await get('/ledger/verify')).valid === true);
+
+  // ---- receipts ----
+  let v = await get(`/verify/${saleReceipt.hash}`);
+  ok('RC1. Receipt verifies: hash, signature and ledger all OK', v.found && v.authentic === true && v.checks.hash && v.checks.signature && v.checks.ledger
+    && v.entry.id === saleReceipt.entry_id && v.entry.event_type === 'SALE_INITIATED' && v.plot.dag_no === '123');
+  ok('RC2. Public answer masks NIDs', v.entry.data.seller_nid === '••••0101' && !JSON.stringify(v).includes('9990000101'));
+  ok('RC3. Public key fingerprint included', /^[0-9a-f]{16}$/.test(v.public_key_fingerprint));
+  r = await fetch(`${base}/verify/${'a'.repeat(64)}`);
+  ok('RC4. Unknown hash -> 404 NOT_IN_LEDGER', r.status === 404 && (await r.json()).code === 'NOT_IN_LEDGER');
+  r = await fetch(`${base}/verify/not-a-hash`);
+  ok('RC5. Malformed code -> 400 BAD_HASH', r.status === 400 && (await r.json()).code === 'BAD_HASH');
+  await post('/dev/tamper');
+  const tampered = (await get('/ledger')).find((e) => e.event_type === 'SALE_INITIATED');
+  v = await get(`/verify/${tampered.hash}`);
+  ok('RC6. After tampering, the receipt is no longer authentic (hash fails, ledger flagged)', v.found && v.authentic === false && v.checks.hash === false && v.checks.ledger === false);
+  await post('/dev/reset');
+}
+
 (async () => {
   try {
     await start();
@@ -955,6 +1015,7 @@ async function agreementTests() {
     await mortgageLookupConcurrencyTests();
     await registryMismatchTests();
     await agreementTests();
+    await identityAndReceiptTests();
     await integrityTests();
     await restartTests();
     await demoGuardTests();
