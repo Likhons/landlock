@@ -416,6 +416,48 @@ export default function App() {
     const shift = mini ? 160 : -160 // collapsing: the page was 160px further right
     el.animate([{ transform: `translateX(${shift}px)` }, { transform: 'none' }], { duration: 300, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' })
   }), [])
+  // Scroll reveal ("ink settling on paper"): sections and cards fade and rise in once, the first time
+  // they come into view; cards in one row follow each other (big screens; phones draw only the lines). A data attribute (not a class) marks
+  // them, so React re-rendering a className never hides an element again. Removed when done, so each
+  // element's own hover transitions work as before. Off with reduced motion.
+  useEffect(() => {
+    if (!('IntersectionObserver' in window) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined
+    // Phones only draw the section lines: revealing whole cards while scrolling cost frames there
+    const phone = window.matchMedia('(max-width: 760px), (hover: none)').matches
+    const SEL = phone ? '.sec-label'
+      : '.sec-label, .row-top > *, .row-evidence > *, .bottom > *, .flow-head, .row-actions > .desk, .integrity, .lab, .footer'
+    const seen = new WeakSet()
+    const io = new IntersectionObserver((list) => {
+      for (const e of list) {
+        if (!e.isIntersecting) continue
+        const el = e.target
+        io.unobserve(el)
+        el.dataset.rv = 'in'
+        setTimeout(() => { delete el.dataset.rv; el.style.removeProperty('--rv-i') }, 1300)
+      }
+    }, { rootMargin: '0px 0px -6% 0px' })
+    let raf = 0
+    const scan = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        document.querySelectorAll(SEL).forEach((el) => {
+          if (seen.has(el)) return
+          seen.add(el)
+          el.style.setProperty('--rv-i', Math.min([...el.parentElement.children].indexOf(el), 3))
+          el.dataset.rv = ''
+          io.observe(el)
+        })
+      })
+    }
+    scan()
+    // the hero's drifting light pauses while the hero is off screen
+    const hero = document.querySelector('.hero')
+    const heroIo = new IntersectionObserver(([e]) => { if (e.isIntersecting) delete hero.dataset.still; else hero.dataset.still = '' })
+    if (hero) heroIo.observe(hero)
+    const mo = new MutationObserver(scan)
+    mo.observe(document.getElementById('root'), { childList: true, subtree: true })
+    return () => { io.disconnect(); heroIo.disconnect(); mo.disconnect(); cancelAnimationFrame(raf) }
+  }, [])
   const toggleNav = () => {
     if (window.matchMedia('(min-width: 1200px)').matches) sidebarMini.toggle()
     else drawer.toggle()
